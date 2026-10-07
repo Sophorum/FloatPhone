@@ -80,6 +80,15 @@ export function downloadRemoteUrl(url: string, filename: string): void {
     a.remove();
 }
 
+export type ImageSaveResult = {
+    /** 是否走通了一条结果可确认的通道 */
+    ok: boolean;
+    /** 给用户看的说明；失败时带上各条通道的结果，方便排查 */
+    message: string;
+    /** 图床直链（上传成功时才有）。宿主连下载都拦的话，让用户自己打开它、长按保存。 */
+    remoteUrl?: string;
+};
+
 /**
  * 保存图片文件（分享摘抄卡片等）。
  *
@@ -89,17 +98,19 @@ export function downloadRemoteUrl(url: string, filename: string): void {
  * 文本类文件不走那条分流，所以同一个 downloadFile 导出 .md 是好的——
  * 这也是「同一个下载函数，文本能存、图片不能存」的原因。
  *
- * 因此在安卓 WebView 里按兼容性从高到低试：
- *   ① 系统分享面板 —— 可直接「保存到相册」，完全绕开下载器；
- *   ② 把类型换成 application/octet-stream 再走常规下载 —— 绕开宿主对 image/*
- *      的分流（文件后缀仍是 .png，内容还是 PNG，只是类型标签变了）。
+ * 因此在安卓 WebView 里按顺序试，每条的失败原因都记下来一起返回——
+ * 之前把图床那步的失败静默吞掉，结果是用户只看到最后那条 blob 报错，
+ * 完全不知道图床其实没走通（比如部署里没配 IMGBB_API_KEY）。
+ *
  * 其它浏览器（含 iOS）保持原来的行为，不受影响。
  */
-export async function saveImageBlob(blob: Blob, filename: string): Promise<string | null> {
+export async function saveImageBlob(blob: Blob, filename: string): Promise<ImageSaveResult> {
     if (!isAndroidWebView()) {
         await downloadFile(blob, filename);
-        return null;
+        return { ok: true, message: "" };
     }
+
+    const tried: string[] = [];
 
     // ① 系统分享面板：最干净，图片不出本机
     const file = new File([blob], filename, { type: blob.type || "image/png" });
@@ -108,12 +119,16 @@ export async function saveImageBlob(blob: Blob, filename: string): Promise<strin
         && navigator.canShare({ files: [file] })) {
         try {
             await navigator.share({ files: [file] });
-            return null;
+            return { ok: true, message: "已交给系统分享面板。" };
         } catch (err) {
-            // 用户自己在分享面板上取消了，就当他不想存，别再弹下载
-            if (err instanceof DOMException && err.name === "AbortError") return null;
-            // 其它失败（壳里没有真的分享实现等）继续往下试
+            // 用户自己在分享面板上取消了，就当他不想存
+            if (err instanceof DOMException && err.name === "AbortError") {
+                return { ok: true, message: "已取消分享。" };
+            }
+            tried.push(`系统分享失败（${err instanceof Error ? err.message : String(err)}）`);
         }
+    } else {
+        tried.push("系统分享面板不可用");
     }
 
     // ② 图床直链：宿主只认 http(s)，那就把图先上传成一条 http(s) 再交给它。
@@ -125,8 +140,14 @@ export async function saveImageBlob(blob: Blob, filename: string): Promise<strin
             `/api/image-hosting/fetch?url=${encodeURIComponent(remote)}&name=${encodeURIComponent(filename)}`,
             filename,
         );
-        return "已通过图床保存（图床上的副本 1 天后自动删除）";
-    } catch { /* 没配图床、或上传失败，继续往下试 */ }
+        return {
+            ok: true,
+            remoteUrl: remote,
+            message: "已通过图床保存（图床上的副本 1 天后自动删除）。",
+        };
+    } catch (err) {
+        tried.push(`图床：${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // ③ 换掉类型标签再走常规下载：绕开宿主对 image/* 的分流。
     // ④ 原样下载兜底。
@@ -134,7 +155,10 @@ export async function saveImageBlob(blob: Blob, filename: string): Promise<strin
         ? blob
         : new Blob([blob], { type: "application/octet-stream" });
     await downloadFile(neutral, filename);
-    return null;
+    return {
+        ok: false,
+        message: `常规下载走完了，但在这个 App 里很可能同样存不下来。各通道结果：${tried.join("；")}`,
+    };
 }
 
 export async function downloadUrl(url: string, filename: string): Promise<void> {
