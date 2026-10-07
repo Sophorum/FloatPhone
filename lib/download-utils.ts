@@ -59,8 +59,8 @@ export async function downloadFile(blob: Blob, filename: string, options: Downlo
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** 安卓 WebView：UA 里带 "; wv)"。页面内生成的 blob: 下载在这类宿主里最容易被
- *  单独接管，所以只在这类环境走 saveImageBlob 的降级链，普通浏览器不受影响。 */
+/** 安卓 WebView：UA 里带 "; wv)"。这类宿主常把 blob: 图片交给只认 http(s) 的
+ *  原生下载器，所以分享界面会给用户一个「通过图床保存」的备选。 */
 export function isAndroidWebView(): boolean {
     if (typeof navigator === "undefined") return false;
     const ua = navigator.userAgent || "";
@@ -83,38 +83,27 @@ export function downloadRemoteUrl(url: string, filename: string): void {
 export type ImageSaveResult = {
     /** 是否走通了一条结果可确认的通道 */
     ok: boolean;
-    /** 给用户看的说明；失败时带上各条通道的结果，方便排查 */
+    /** 给用户看的说明 */
     message: string;
-    /** 图床直链（上传成功时才有）。宿主连下载都拦的话，让用户自己打开它、长按保存。 */
-    remoteUrl?: string;
 };
 
 /**
- * 保存图片文件（分享摘抄卡片等）。
+ * 本地保存图片（分享摘抄卡片等）：图片不出本机。
  *
- * 背景：有些安卓 WebView / 壳把「存图片」单独接管成自家原生下载器，那个下载器
- * 只认 http(s)，拿到页面内生成的 blob: 地址就报
- *   Expected URL scheme 'http' or 'https' but was 'blob'
- * 文本类文件不走那条分流，所以同一个 downloadFile 导出 .md 是好的——
- * 这也是「同一个下载函数，文本能存、图片不能存」的原因。
+ * 先试系统分享面板（可直接存相册），没有再走原来的 blob 下载（<a download>）。
  *
- * 因此在安卓 WebView 里按顺序试，每条的失败原因都记下来一起返回——
- * 之前把图床那步的失败静默吞掉，结果是用户只看到最后那条 blob 报错，
- * 完全不知道图床其实没走通（比如部署里没配 IMGBB_API_KEY）。
+ * 为什么不做成"自动降级到图床"：那个失败发生在宿主原生层——它把 blob: 地址
+ * 丢进只认 http(s) 的下载器就抛错，网页端连个回调都拿不到（报错也不出现在页面里），
+ * 所以程序无从判断"到底存下来了没有"。与其猜，不如让用户在弹窗上自己选，
+ * 于是有了「本地保存 / 通过图床保存」这个二选一（见 reading-share-dialog）。
  *
- * 其它浏览器（含 iOS）保持原来的行为，不受影响。
+ * 其它浏览器（含 iOS）行为不变。
  */
 export async function saveImageBlob(blob: Blob, filename: string): Promise<ImageSaveResult> {
-    if (!isAndroidWebView()) {
-        await downloadFile(blob, filename);
-        return { ok: true, message: "" };
-    }
-
-    const tried: string[] = [];
-
-    // ① 系统分享面板：最干净，图片不出本机
+    // 系统分享面板：最干净，图片不出本机，能直接存到相册
     const file = new File([blob], filename, { type: blob.type || "image/png" });
-    if (typeof navigator.share === "function"
+    if (typeof navigator !== "undefined"
+        && typeof navigator.share === "function"
         && typeof navigator.canShare === "function"
         && navigator.canShare({ files: [file] })) {
         try {
@@ -125,40 +114,35 @@ export async function saveImageBlob(blob: Blob, filename: string): Promise<Image
             if (err instanceof DOMException && err.name === "AbortError") {
                 return { ok: true, message: "已取消分享。" };
             }
-            tried.push(`系统分享失败（${err instanceof Error ? err.message : String(err)}）`);
+            // 壳里没有真的分享实现，继续走下面的普通下载
         }
-    } else {
-        tried.push("系统分享面板不可用");
     }
 
-    // ② 图床直链：宿主只认 http(s)，那就把图先上传成一条 http(s) 再交给它。
-    //    经同源中转是为了让 download 属性生效（跨域地址上的 download 会被浏览器
-    //    忽略，变成「打开图片」），并带上 Content-Disposition 确保走下载。
+    await downloadFile(blob, filename);
+    return { ok: true, message: "已用本地方式保存。" };
+}
+
+/**
+ * 图床通道：先把图上传成一条 http(s) 直链，再交给下载器——宿主只认 http(s) 时
+ * 就靠这条。经同源中转是为了让 download 属性生效（跨域地址上的 download 会被
+ * 浏览器忽略，变成「打开图片」），并带上 Content-Disposition 确保走下载。
+ *
+ * 注意：图片会短暂上传到公网（1 天后自动删除），所以这条只由用户主动选择。
+ */
+export async function saveImageBlobViaHost(blob: Blob, filename: string): Promise<ImageSaveResult> {
     try {
         const remote = await uploadImageForDownload(blob, filename);
         downloadRemoteUrl(
             `/api/image-hosting/fetch?url=${encodeURIComponent(remote)}&name=${encodeURIComponent(filename)}`,
             filename,
         );
-        return {
-            ok: true,
-            remoteUrl: remote,
-            message: "已通过图床保存（图床上的副本 1 天后自动删除）。",
-        };
+        return { ok: true, message: "已通过图床保存（图床上的副本 1 天后自动删除）。" };
     } catch (err) {
-        tried.push(`图床：${err instanceof Error ? err.message : String(err)}`);
+        return {
+            ok: false,
+            message: `图床保存失败：${err instanceof Error ? err.message : String(err)}`,
+        };
     }
-
-    // ③ 换掉类型标签再走常规下载：绕开宿主对 image/* 的分流。
-    // ④ 原样下载兜底。
-    const neutral = blob.type === "application/octet-stream"
-        ? blob
-        : new Blob([blob], { type: "application/octet-stream" });
-    await downloadFile(neutral, filename);
-    return {
-        ok: false,
-        message: `常规下载走完了，但在这个 App 里很可能同样存不下来。各通道结果：${tried.join("；")}`,
-    };
 }
 
 export async function downloadUrl(url: string, filename: string): Promise<void> {

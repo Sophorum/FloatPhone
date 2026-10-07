@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ContentDialog } from "@/components/ui/modal";
 import { Toggle } from "@/components/ui/form";
-import { saveImageBlob } from "@/lib/download-utils";
+import { saveImageBlob, saveImageBlobViaHost } from "@/lib/download-utils";
 import { loadReadingProfile, loadReadingProfileAvatar } from "@/lib/reading-profile";
 import {
     READING_SHARE_PALETTES,
@@ -118,11 +118,12 @@ export function ReadingShareDialog({
     const [withMine, setWithMine] = useState(hasMine);
     const [withTheirs, setWithTheirs] = useState(hasTheirs);
     const [busy, setBusy] = useState(false);
+    const [savingVia, setSavingVia] = useState<"local" | "host" | null>(null);
     const [error, setError] = useState<string | null>(null);
-    /** 保存结果的说明（走通了哪条通道、哪条失败了），和上面的错误分开显示 */
+    /** 保存结果的说明（走通了哪条通道、失败了为什么） */
     const [note, setNote] = useState<string | null>(null);
-    /** 图床上传成功后的直链。宿主连下载都拦时，点它打开原图、长按保存。 */
-    const [remoteUrl, setRemoteUrl] = useState<string | null>(null);
+    /** 保存方式选择弹窗。宿主层失败网页端感知不到，所以不做自动降级，直接让用户选。 */
+    const [chooserOpen, setChooserOpen] = useState(false);
     const previewRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const avatarRef = useRef<CanvasImageSource | null>(null);
@@ -183,167 +184,242 @@ export function ReadingShareDialog({
         return () => { cancelled = true; };
     }, [align, avatarShape, palette, ratio, template, withMine, withTheirs]);
 
-    const handleDownload = async () => {
+    /** 文件名：带当天日期，同时导出多张也不会互相覆盖 */
+    const buildFileName = () => {
+        const stamp = new Date().toISOString().slice(0, 10);
+        return `摘抄-${contentRef.current.bookTitle || "未命名"}-${stamp}.png`;
+    };
+
+    /** 点「保存图片」先弹选择窗：本地保存（不出本机）/ 通过图床保存（走 http 直链） */
+    const openChooser = () => {
+        setError(null);
+        setNote(null);
+        setChooserOpen(true);
+    };
+
+    /** 本地保存：系统分享面板或原来的 blob 下载 */
+    const runLocalSave = async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         try {
             setBusy(true);
+            setSavingVia("local");
             setError(null);
             setNote(null);
-            setRemoteUrl(null);
             const blob = await readingShareCardToBlob(canvas);
-            const stamp = new Date().toISOString().slice(0, 10);
-            const result = await saveImageBlob(blob, `摘抄-${contentRef.current.bookTitle || "未命名"}-${stamp}.png`);
+            const result = await saveImageBlob(blob, buildFileName());
             setNote(result.message);
-            if (result.remoteUrl) setRemoteUrl(result.remoteUrl);
         } catch (err) {
             setError(err instanceof Error ? err.message : "保存失败");
         } finally {
             setBusy(false);
+            setSavingVia(null);
+        }
+    };
+
+    /** 图床保存：先上传成 https 直链再交给下载器（宿主只认 http(s) 时靠这条） */
+    const runHostSave = async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        try {
+            setBusy(true);
+            setSavingVia("host");
+            setError(null);
+            setNote(null);
+            const blob = await readingShareCardToBlob(canvas);
+            const result = await saveImageBlobViaHost(blob, buildFileName());
+            setNote(result.message);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "图床保存失败");
+        } finally {
+            setBusy(false);
+            setSavingVia(null);
         }
     };
 
     return (
-        <ContentDialog
-            title="分享摘抄"
-            confirmLabel={busy ? "生成中..." : "保存图片"}
-            cancelLabel="关闭"
-            onConfirm={() => { if (!busy) void handleDownload(); }}
-            onCancel={onClose}
-        >
-            <div className="reading-settings-grid">
-                <div className="reading-share-preview" ref={previewRef} />
+        <>
+            <ContentDialog
+                title="分享摘抄"
+                confirmLabel="保存图片"
+                cancelLabel="关闭"
+                onConfirm={() => { if (!busy) openChooser(); }}
+                onCancel={onClose}
+            >
+                <div className="reading-settings-grid">
+                    <div className="reading-share-preview" ref={previewRef} />
 
-                <div className="reading-share-templates">
-                    {READING_SHARE_TEMPLATES.map((option) => (
-                        <button
-                            key={option.id}
-                            type="button"
-                            className={`reading-share-template${template === option.id ? " is-active" : ""}`}
-                            onClick={() => pickTemplate(option.id)}
-                        >
-                            {option.label}
-                        </button>
-                    ))}
-                </div>
+                    <div className="reading-share-templates">
+                        {READING_SHARE_TEMPLATES.map((option) => (
+                            <button
+                                key={option.id}
+                                type="button"
+                                className={`reading-share-template${template === option.id ? " is-active" : ""}`}
+                                onClick={() => pickTemplate(option.id)}
+                            >
+                                {option.label}
+                            </button>
+                        ))}
+                    </div>
 
-                <div className="reading-share-knobs">
-                    <div className="reading-share-schemes">
-                        {READING_SHARE_PALETTES[template].map((scheme) => {
-                            const active = scheme.palette.background === palette.background
-                                && scheme.palette.ink === palette.ink
-                                && scheme.palette.accent === palette.accent;
-                            return (
+                    <div className="reading-share-knobs">
+                        <div className="reading-share-schemes">
+                            {READING_SHARE_PALETTES[template].map((scheme) => {
+                                const active = scheme.palette.background === palette.background
+                                    && scheme.palette.ink === palette.ink
+                                    && scheme.palette.accent === palette.accent;
+                                return (
+                                    <button
+                                        key={scheme.name}
+                                        type="button"
+                                        className={`reading-share-scheme${active ? " is-active" : ""}`}
+                                        onClick={() => setPalette(scheme.palette)}
+                                        title={scheme.name}
+                                        aria-label={scheme.name}
+                                    >
+                                        <span className="reading-share-scheme-swatch" style={{ background: scheme.palette.background }}>
+                                            <i style={{ background: scheme.palette.accent }} />
+                                            <i style={{ background: scheme.palette.ink }} />
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="reading-share-colors">
+                            {([
+                                ["背景", "background"],
+                                ["文字", "ink"],
+                                ["次要", "sub"],
+                                ["点缀", "accent"],
+                            ] as Array<[string, keyof ReadingSharePalette]>).map(([label, key]) => (
+                                <label key={key} className="reading-share-color">
+                                    <span>{label}</span>
+                                    <ColorInput
+                                        value={palette[key]}
+                                        onChange={(value) => setPalette((prev) => ({ ...prev, [key]: value }))}
+                                    />
+                                </label>
+                            ))}
+                        </div>
+                        <div className="reading-share-aligns">
+                            {([["左对齐", "left"], ["居中", "center"], ["右对齐", "right"]] as Array<[string, ReadingShareAlign]>).map(([label, value]) => (
                                 <button
-                                    key={scheme.name}
+                                    key={value}
                                     type="button"
-                                    className={`reading-share-scheme${active ? " is-active" : ""}`}
-                                    onClick={() => setPalette(scheme.palette)}
-                                    title={scheme.name}
-                                    aria-label={scheme.name}
-                                >
-                                    <span className="reading-share-scheme-swatch" style={{ background: scheme.palette.background }}>
-                                        <i style={{ background: scheme.palette.accent }} />
-                                        <i style={{ background: scheme.palette.ink }} />
-                                    </span>
-                                </button>
-                            );
-                        })}
+                                    className={`reading-share-template${align === value ? " is-active" : ""}`}
+                                    onClick={() => setAlign(value)}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <div className="reading-share-aligns">
+                            {READING_SHARE_RATIOS.map(({ id, label }) => (
+                                <button
+                                    key={id}
+                                    type="button"
+                                    className={`reading-share-template${ratio === id ? " is-active" : ""}`}
+                                    onClick={() => setRatio(id)}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <div className="reading-share-aligns">
+                            {([["圆头像", "circle"], ["方头像", "square"]] as Array<[string, ReadingShareAvatarShape]>).map(([label, value]) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    className={`reading-share-template${avatarShape === value ? " is-active" : ""}`}
+                                    onClick={() => setAvatarShape(value)}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <ReadingPresetBar<ShareStyle>
+                            kind="share"
+                            current={() => ({ template, palette, align, avatarShape, ratio })}
+                            onLoad={applyStyle}
+                            defaultName={READING_SHARE_TEMPLATES.find(t => t.id === template)?.label || "我的样式"}
+                        />
                     </div>
-                    <div className="reading-share-colors">
-                        {([
-                            ["背景", "background"],
-                            ["文字", "ink"],
-                            ["次要", "sub"],
-                            ["点缀", "accent"],
-                        ] as Array<[string, keyof ReadingSharePalette]>).map(([label, key]) => (
-                            <label key={key} className="reading-share-color">
-                                <span>{label}</span>
-                                <ColorInput
-                                    value={palette[key]}
-                                    onChange={(value) => setPalette((prev) => ({ ...prev, [key]: value }))}
-                                />
-                            </label>
-                        ))}
-                    </div>
-                    <div className="reading-share-aligns">
-                        {([["左对齐", "left"], ["居中", "center"], ["右对齐", "right"]] as Array<[string, ReadingShareAlign]>).map(([label, value]) => (
-                            <button
-                                key={value}
-                                type="button"
-                                className={`reading-share-template${align === value ? " is-active" : ""}`}
-                                onClick={() => setAlign(value)}
-                            >{label}</button>
-                        ))}
-                    </div>
-                    <div className="reading-share-aligns">
-                        {READING_SHARE_RATIOS.map(({ id, label }) => (
-                            <button
-                                key={id}
-                                type="button"
-                                className={`reading-share-template${ratio === id ? " is-active" : ""}`}
-                                onClick={() => setRatio(id)}
-                            >{label}</button>
-                        ))}
-                    </div>
-                    <div className="reading-share-aligns">
-                        {([["圆头像", "circle"], ["方头像", "square"]] as Array<[string, ReadingShareAvatarShape]>).map(([label, value]) => (
-                            <button
-                                key={value}
-                                type="button"
-                                className={`reading-share-template${avatarShape === value ? " is-active" : ""}`}
-                                onClick={() => setAvatarShape(value)}
-                            >{label}</button>
-                        ))}
-                    </div>
-                    <ReadingPresetBar<ShareStyle>
-                        kind="share"
-                        current={() => ({ template, palette, align, avatarShape, ratio })}
-                        onLoad={applyStyle}
-                        defaultName={READING_SHARE_TEMPLATES.find(t => t.id === template)?.label || "我的样式"}
-                    />
+
+                    {hasMine && (
+                        <div className="reading-settings-inline-note">
+                            <span>带上我的批注</span>
+                            <Toggle checked={withMine} onChange={setWithMine} />
+                        </div>
+                    )}
+                    {hasTheirs && (
+                        <div className="reading-settings-inline-note">
+                            <span>带上 TA 的批注</span>
+                            <Toggle checked={withTheirs} onChange={setWithTheirs} />
+                        </div>
+                    )}
+
+                    {note && !chooserOpen && (
+                        <div className="reading-settings-inline-note">
+                            <span>{note}</span>
+                        </div>
+                    )}
+
+                    {error && (
+                        <div className="reading-settings-inline-note">
+                            <span>出错了</span>
+                            <span>{error}</span>
+                        </div>
+                    )}
                 </div>
+            </ContentDialog>
 
-                {hasMine && (
-                    <div className="reading-settings-inline-note">
-                        <span>带上我的批注</span>
-                        <Toggle checked={withMine} onChange={setWithMine} />
-                    </div>
-                )}
-                {hasTheirs && (
-                    <div className="reading-settings-inline-note">
-                        <span>带上 TA 的批注</span>
-                        <Toggle checked={withTheirs} onChange={setWithTheirs} />
-                    </div>
-                )}
+            {chooserOpen && (
+                <ContentDialog
+                    title="保存这张卡片"
+                    confirmLabel=""
+                    cancelLabel="关闭"
+                    onConfirm={() => setChooserOpen(false)}
+                    onCancel={() => setChooserOpen(false)}
+                >
+                    <div className="reading-settings-grid">
+                        <div className="reading-settings-inline-note">
+                            <span>
+                                「本地保存」图片不出本机；有些 App 的内置浏览器接不住这种图片，
+                                存了却没反应时，改用「通过图床保存」。
+                            </span>
+                        </div>
 
-                {note && (
-                    <div className="reading-settings-inline-note">
-                        <span>{note}</span>
-                    </div>
-                )}
-
-                {remoteUrl && (
-                    <div className="reading-settings-inline-note">
-                        <a
-                            className="ui-btn ui-btn-outline"
-                            href={remoteUrl}
-                            target="_blank"
-                            rel="noopener"
+                        <button
+                            type="button"
+                            className="ui-btn ui-btn-primary"
+                            disabled={busy}
+                            onClick={() => { void runLocalSave(); }}
                         >
-                            打开图片
-                        </a>
-                        <span>下载没动静时点这里，在图片上长按即可保存</span>
-                    </div>
-                )}
+                            {busy && savingVia === "local" ? "保存中…" : "本地保存"}
+                        </button>
 
-                {error && (
-                    <div className="reading-settings-inline-note">
-                        <span>出错了</span>
-                        <span>{error}</span>
+                        <button
+                            type="button"
+                            className="ui-btn ui-btn-outline"
+                            disabled={busy}
+                            onClick={() => { void runHostSave(); }}
+                        >
+                            {busy && savingVia === "host" ? "保存中…" : "通过图床保存"}
+                        </button>
+
+                        <div className="reading-settings-inline-note">
+                            <span>图床保存会先把图片上传到公网，副本 1 天后自动删除</span>
+                        </div>
+
+                        {note && (
+                            <div className="reading-settings-inline-note">
+                                <span>{note}</span>
+                            </div>
+                        )}
+
+                        {error && (
+                            <div className="reading-settings-inline-note">
+                                <span>出错了</span>
+                                <span>{error}</span>
+                            </div>
+                        )}
                     </div>
-                )}
-            </div>
-        </ContentDialog>
+                </ContentDialog>
+            )}
+        </>
     );
 }
