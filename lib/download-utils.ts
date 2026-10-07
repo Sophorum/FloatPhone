@@ -57,6 +57,56 @@ export async function downloadFile(blob: Blob, filename: string, options: Downlo
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** 安卓 WebView：UA 里带 "; wv)"。页面内生成的 blob: 下载在这类宿主里最容易被
+ *  单独接管，所以只在这类环境走 saveImageBlob 的降级链，普通浏览器不受影响。 */
+export function isAndroidWebView(): boolean {
+    if (typeof navigator === "undefined") return false;
+    const ua = navigator.userAgent || "";
+    return /Android/i.test(ua) && /\bwv\b/.test(ua);
+}
+
+/**
+ * 保存图片文件（分享摘抄卡片等）。
+ *
+ * 背景：有些安卓 WebView / 壳把「存图片」单独接管成自家原生下载器，那个下载器
+ * 只认 http(s)，拿到页面内生成的 blob: 地址就报
+ *   Expected URL scheme 'http' or 'https' but was 'blob'
+ * 文本类文件不走那条分流，所以同一个 downloadFile 导出 .md 是好的——
+ * 这也是「同一个下载函数，文本能存、图片不能存」的原因。
+ *
+ * 因此在安卓 WebView 里按兼容性从高到低试：
+ *   ① 系统分享面板 —— 可直接「保存到相册」，完全绕开下载器；
+ *   ② 把类型换成 application/octet-stream 再走常规下载 —— 绕开宿主对 image/*
+ *      的分流（文件后缀仍是 .png，内容还是 PNG，只是类型标签变了）。
+ * 其它浏览器（含 iOS）保持原来的行为，不受影响。
+ */
+export async function saveImageBlob(blob: Blob, filename: string): Promise<void> {
+    if (!isAndroidWebView()) {
+        await downloadFile(blob, filename);
+        return;
+    }
+
+    const file = new File([blob], filename, { type: blob.type || "image/png" });
+    const canShareFiles = typeof navigator.share === "function"
+        && typeof navigator.canShare === "function"
+        && navigator.canShare({ files: [file] });
+    if (canShareFiles) {
+        try {
+            await navigator.share({ files: [file] });
+            return;
+        } catch (err) {
+            // 用户自己在分享面板上取消了，就当他不想存，别再弹下载
+            if (err instanceof DOMException && err.name === "AbortError") return;
+            // 其它失败（壳里没有真的分享实现等）继续往下试下载
+        }
+    }
+
+    const neutral = blob.type === "application/octet-stream"
+        ? blob
+        : new Blob([blob], { type: "application/octet-stream" });
+    await downloadFile(neutral, filename);
+}
+
 export async function downloadUrl(url: string, filename: string): Promise<void> {
     let blob: Blob | null = null;
 

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ContentDialog } from "@/components/ui/modal";
 import { Toggle } from "@/components/ui/form";
-import { downloadFile } from "@/lib/download-utils";
+import { saveImageBlob } from "@/lib/download-utils";
 import { loadReadingProfile, loadReadingProfileAvatar } from "@/lib/reading-profile";
 import {
     READING_SHARE_PALETTES,
@@ -187,7 +187,7 @@ export function ReadingShareDialog({
             setError(null);
             const blob = await readingShareCardToBlob(canvas);
             const stamp = new Date().toISOString().slice(0, 10);
-            await downloadFile(blob, `摘抄-${contentRef.current.bookTitle || "未命名"}-${stamp}.png`);
+            await saveImageBlob(blob, `摘抄-${contentRef.current.bookTitle || "未命名"}-${stamp}.png`);
         } catch (err) {
             setError(err instanceof Error ? err.message : "保存失败");
         } finally {
