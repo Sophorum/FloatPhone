@@ -119,6 +119,8 @@ export function ReadingShareDialog({
     const [withTheirs, setWithTheirs] = useState(hasTheirs);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    /** 保存过程的提示（图床通道生效、剪贴板复制成功等），和错误分开显示 */
+    const [note, setNote] = useState<string | null>(null);
     const previewRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const avatarRef = useRef<CanvasImageSource | null>(null);
@@ -185,15 +187,33 @@ export function ReadingShareDialog({
         try {
             setBusy(true);
             setError(null);
-            setCopyNote(null);
+            setNote(null);
             const blob = await readingShareCardToBlob(canvas);
             const stamp = new Date().toISOString().slice(0, 10);
-            const note = await saveImageBlob(blob, `摘抄-${contentRef.current.bookTitle || "未命名"}-${stamp}.png`);
-            setCopyNote(note);
+            setNote(await saveImageBlob(blob, `摘抄-${contentRef.current.bookTitle || "未命名"}-${stamp}.png`));
         } catch (err) {
             setError(err instanceof Error ? err.message : "保存失败");
         } finally {
             setBusy(false);
+        }
+    };
+
+    /** 兜底出口：有的宿主连 https 直链也不放行时，直接把图写进系统剪贴板，
+     *  粘到聊天窗口或备忘录即可，不经过任何下载器。 */
+    const handleCopyImage = async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        setNote(null);
+        try {
+            const blob = await readingShareCardToBlob(canvas);
+            if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+                setNote("这个浏览器不支持复制图片，试试换系统浏览器打开，或直接截图。");
+                return;
+            }
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+            setNote("已复制到剪贴板，去聊天窗口或备忘录粘贴即可。");
+        } catch (err) {
+            setNote(err instanceof Error ? err.message : "复制失败，可以直接截图。");
         }
     };
 
@@ -308,6 +328,24 @@ export function ReadingShareDialog({
                     <div className="reading-settings-inline-note">
                         <span>带上 TA 的批注</span>
                         <Toggle checked={withTheirs} onChange={setWithTheirs} />
+                    </div>
+                )}
+
+                <div className="reading-settings-inline-note">
+                    <button
+                        type="button"
+                        className="ui-btn ui-btn-outline"
+                        disabled={busy}
+                        onClick={() => { void handleCopyImage(); }}
+                    >
+                        复制图片
+                    </button>
+                    <span>存不下来时用这个：复制后粘到聊天窗口即可</span>
+                </div>
+
+                {note && (
+                    <div className="reading-settings-inline-note">
+                        <span>{note}</span>
                     </div>
                 )}
 
