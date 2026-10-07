@@ -119,6 +119,7 @@ export function ReadingShareDialog({
     const [withTheirs, setWithTheirs] = useState(hasTheirs);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [copyNote, setCopyNote] = useState<string | null>(null);
     const previewRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const avatarRef = useRef<CanvasImageSource | null>(null);
@@ -192,6 +193,29 @@ export function ReadingShareDialog({
             setError(err instanceof Error ? err.message : "保存失败");
         } finally {
             setBusy(false);
+        }
+    };
+
+    /** 兜底出口：有些宿主 App 的原生下载器只认 http(s)，页面内现做的 blob: 图片
+     *  一律拒收（同一个下载函数导出 .md 却正常，因为文本不走那条图片分流）。
+     *  这条不经过下载器——直接把图片写进系统剪贴板，粘到聊天窗口或相册即可。 */
+    const handleCopyImage = async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        setCopyNote(null);
+        try {
+            const blob = await readingShareCardToBlob(canvas);
+            if (typeof ClipboardItem === "undefined"
+                || typeof navigator === "undefined"
+                || !navigator.clipboard?.write) {
+                setCopyNote("这个浏览器不支持复制图片，改用「保存图片」或直接截图吧。");
+                return;
+            }
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+            setCopyNote("已复制到剪贴板，去聊天窗口粘贴即可。");
+        } catch (err) {
+            // 剪贴板被浏览器安全策略拒绝时也会走到这里，给一句能自己动手的提示
+            setCopyNote(err instanceof Error ? err.message : "复制失败，可以直接截图保存。");
         }
     };
 
@@ -306,6 +330,23 @@ export function ReadingShareDialog({
                     <div className="reading-settings-inline-note">
                         <span>带上 TA 的批注</span>
                         <Toggle checked={withTheirs} onChange={setWithTheirs} />
+                    </div>
+                )}
+
+                <div className="reading-settings-inline-note">
+                    <button
+                        type="button"
+                        className="ui-btn ui-btn-outline"
+                        disabled={busy}
+                        onClick={() => { void handleCopyImage(); }}
+                    >
+                        复制图片
+                    </button>
+                    <span>存不下来时用这个：复制后粘到聊天窗口即可</span>
+                </div>
+                {copyNote && (
+                    <div className="reading-settings-inline-note">
+                        <span>{copyNote}</span>
                     </div>
                 )}
 
