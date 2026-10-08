@@ -354,8 +354,10 @@ export function UserIdentitySettings() {
                                                 className="font-medium"
                                             />
                                             <span className="menu-desc ml-1">
-                                                别人拍你时显示为「{identity.name || "某人"} 拍了拍 你 的{pokeSuffixPreview || "…"}」，
-                                                最长 {POKE_SUFFIX_MAX_LENGTH} 字；绑定了这张面具的角色才会用这条后缀
+                                                别人拍你时会显示成「&lt;角色名&gt; 拍了拍 你 的{pokeSuffixPreview || "…"}」——
+                                                角色名按会话里的名字/备注填，后缀属于被拍的你。
+                                                <br />
+                                                留空则不加后缀；最长 {POKE_SUFFIX_MAX_LENGTH} 字。绑定了这张面具的角色才用这条后缀
                                             </span>
                                         </div>
                                     </>

@@ -8,6 +8,7 @@ import {
     dbReplaceContacts, dbReplaceSessions,
 } from "./chat-db";
 import { resolveUserIdentity } from "./settings-storage";
+import { composePokeLine, loadSessionPokeSuffix } from "./poke-suffix";
 import { loadCharacters } from "./character-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
@@ -372,13 +373,22 @@ export function getChatMessagePreview(msg: ChatMessage): string {
     const callCancel = msg.content?.match(/\[我取消了((?:群?(?:语音|视频))通话)\]/);
     if (callCancel) return `你取消了${callCancel[1]}`;
 
-    // Poke: "你 拍了拍 XX" / "XX 拍了拍 你" (no brackets, user name → "你")
+    // Poke: 与聊天气泡同源组装（composePokeLine），后缀按「被拍的人」取用，
+    // 列表预览和气泡不会再出现两套文案。
     if (msg.mediaType === "poke") {
-        const sender = msg.mediaData?.pokeSender || (msg.role === "user" ? "你" : "对方");
-        const target = msg.mediaData?.pokeTarget || (msg.role === "user" ? "对方" : "你");
-        const dSender = (userName && sender === userName) ? "你" : sender;
-        const dTarget = (userName && target === userName) ? "你" : target;
-        return `${dSender} 拍了拍 ${dTarget}`;
+        const sess = _sessionsCache.find(s => s.id === msg.sessionId);
+        const pokeCharName = msg.senderName
+            || (!sess?.isGroup ? loadCharacters().find(c => c.id === sess?.contactId)?.name : undefined);
+        return composePokeLine({
+            rawSender: msg.mediaData?.pokeSender,
+            rawTarget: msg.mediaData?.pokeTarget,
+            role: msg.role,
+            userName,
+            charName: pokeCharName,
+            inlineSuffix: msg.mediaData?.pokeInlineSuffix,
+            maskSuffix: sess?.contactId ? resolveUserIdentity(sess.contactId)?.pokeSuffix : undefined,
+            sessionSuffix: loadSessionPokeSuffix(msg.sessionId),
+        });
     }
     if (msg.mediaType === "media_file" && msg.mediaData?.fileType === "image") {
         return msg.mediaData.label ? `[图片] ${msg.mediaData.label}` : "[图片]";
