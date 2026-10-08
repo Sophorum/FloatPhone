@@ -6,6 +6,8 @@ import { isMediaStoreRef, loadMediaObjectUrl } from "@/lib/media-cache-storage";
 import { getChatImageFromIndexedDB } from "@/lib/chat-asset-storage";
 import { ChatMessage, createOrGetSession, updateMessageMediaStatus, updateMessageMediaData } from "@/lib/chat-storage";
 import { resolveContactCard } from "@/lib/contact-card";
+import { POKE_SUFFIX_UPDATED_EVENT, formatPokeText, isUserPokeName, loadSessionPokeSuffix } from "@/lib/poke-suffix";
+import { resolveUserIdentity } from "@/lib/settings-storage";
 import { loadCharacters } from "@/lib/character-storage";
 import { CHAT_OPEN_SESSION_EVENT, dispatchOpenAddContact } from "@/lib/chat-notification-events";
 import { ContactCardGenerateFlow } from "@/components/chat/contact-card-generate-flow";
@@ -107,7 +109,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onUpdate, charNa
         case "location":
             return <LocationBubble msg={msg} />;
         case "poke":
-            return <PokeBubble msg={msg} charName={charName} userName={userName} />;
+            return <PokeBubble msg={msg} charName={charName} userName={userName} characterId={characterId} />;
         case "sticker":
             return <StickerBubble msg={msg} characterId={characterId} />;
         case "dice":
@@ -146,6 +148,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onUpdate, charNa
         if (prev.msg.isTyping !== next.msg.isTyping) return false;
         if (prev.msg.mediaData?.status !== next.msg.mediaData?.status) return false;
         if (prev.msg.mediaData?.label !== next.msg.mediaData?.label) return false;
+        if (prev.msg.mediaData?.pokeInlineSuffix !== next.msg.mediaData?.pokeInlineSuffix) return false;
         if (prev.msg.mediaData?.claimedBy?.length !== next.msg.mediaData?.claimedBy?.length) return false;
         if (prev.msg.mediaData?.appName !== next.msg.mediaData?.appName) return false;
         if (prev.msg.mediaData?.appCardTitle !== next.msg.mediaData?.appCardTitle) return false;
@@ -1500,18 +1503,41 @@ function DiceBubble({ msg }: { msg: ChatMessage }) {
     );
 }
 
-function PokeBubble({ msg, charName, userName }: { msg: ChatMessage; charName?: string; userName?: string }) {
+function PokeBubble({ msg, charName, userName, characterId }: { msg: ChatMessage; charName?: string; userName?: string; characterId?: string }) {
     // Prefer mediaData fields (group chat aware), fallback to old role-based logic
     const sender = msg.mediaData?.pokeSender || (msg.role === "user" ? (userName || "你") : (charName || "对方"));
     const target = msg.mediaData?.pokeTarget || (msg.role === "user" ? (charName || "对方") : (userName || "你"));
-    // Replace user's own name with "你" for display
-    const displaySender = sender === userName ? "你" : sender;
-    const displayTarget = target === userName ? "你" : target;
+    // Replace user's own name with "你" for display（AI 也可能直接写「你 / 我」）
+    const displaySender = isUserPokeName(sender, userName) ? "你" : sender;
+    const displayTarget = isUserPokeName(target, userName) ? "你" : target;
+
+    // 后缀配置改动后重算：面具与会话两处广播同一个事件
+    const [suffixTick, setSuffixTick] = useState(0);
+    useEffect(() => {
+        const bump = () => setSuffixTick(v => v + 1);
+        window.addEventListener(POKE_SUFFIX_UPDATED_EVENT, bump);
+        return () => window.removeEventListener(POKE_SUFFIX_UPDATED_EVENT, bump);
+    }, []);
+
+    // 微信的规则：后缀属于被拍的人。
+    //   拍用户 → 取该角色绑定的面具上的后缀（resolveUserIdentity 走的是现成的绑定级联）
+    //   拍角色 → 取「会话 → 聊天信息 → 设置拍一拍」那一格
+    // 两处都没配，才回落到模型硬写进目标名里的后缀。
+    const suffix = useMemo(() => {
+        const inline = msg.mediaData?.pokeInlineSuffix || "";
+        if (isUserPokeName(target, userName)) {
+            return resolveUserIdentity(characterId)?.pokeSuffix?.trim() || inline;
+        }
+        return loadSessionPokeSuffix(msg.sessionId) || inline;
+        // suffixTick：配置变更后强制重算
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [target, userName, characterId, msg.sessionId, msg.mediaData?.pokeInlineSuffix, suffixTick]);
+
     return (
         <div
             className="chat-sys-msg ts-12 mx-auto text-center"
         >
-            {displaySender} 拍了拍 {displayTarget}
+            {formatPokeText(displaySender, displayTarget, suffix)}
         </div>
     );
 }

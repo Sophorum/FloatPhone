@@ -14,6 +14,7 @@ import type { StateValue } from "./chat-storage";
 import { parseStateValues, mergeStateValues } from "./state-value-parser";
 import { stripActionShells } from "./action-parser";
 import { stripTextToolDirectives } from "./text-tool-protocol";
+import { splitPokeTarget } from "./poke-suffix";
 import {
     formatCustomAppDirectiveSummary,
     getCustomAppDirectiveSyntaxHead,
@@ -196,12 +197,22 @@ const RICH_PATTERNS: {
         }),
     },
     {
+        // [A 拍了拍 B]。后缀不在这里定：微信的规则是「后缀属于被拍的人」，
+        // 所以这里只认人物名，模型硬写进目标名里的「的XX」剥到 pokeInlineSuffix 备用，
+        // 真正的后缀由 PokeBubble 按面具/会话配置在渲染时补齐。
         regex: /\[([^\]]+)拍了拍([^\]]+)\]/,
-        build: (m) => ({
-            content: "",
-            mediaType: "poke" as const,
-            mediaData: { pokeSender: m[1]?.trim() || "", pokeTarget: m[2]?.trim() || "" },
-        }),
+        build: (m) => {
+            const { name, inlineSuffix } = splitPokeTarget(m[2] || "");
+            return {
+                content: "",
+                mediaType: "poke" as const,
+                mediaData: {
+                    pokeSender: m[1]?.trim() || "",
+                    pokeTarget: name,
+                    ...(inlineSuffix ? { pokeInlineSuffix: inlineSuffix } : {}),
+                },
+            };
+        },
     },
     {
         regex: new RegExp(`\\[表情包${C}([^\\]]+)\\]`),

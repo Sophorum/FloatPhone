@@ -134,6 +134,7 @@ export type ChatMessage = {
         diceFace?: number;        // 骰子点数（1-6），气泡翻滚后定格并与全屏动效一致
         pokeSender?: string;      // 拍一拍发起人名字
         pokeTarget?: string;      // 拍一拍目标名字
+        pokeInlineSuffix?: string; // 模型自己写死在目标名里的后缀（"小明 的小肚子"），仅作无配置时的回落
         contactCardName?: string; // 名片被推荐人名字（渲染时按推荐人同世界实时解析，未建档也可成卡）
         senderName?: string;      // 转账发起人显示名（群聊）
         recipientId?: string;     // 转账收款人角色 ID

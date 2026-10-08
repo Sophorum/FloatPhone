@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useContext } from "react";
 import { Plus, User, Trash2, FileEdit, AlertCircle, Camera, Link, X, Check } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import { loadUserIdentities, saveUserIdentities } from "@/lib/settings-storage";
+import { POKE_SUFFIX_MAX_LENGTH, normalizePokeSuffix, notifyPokeSuffixChanged } from "@/lib/poke-suffix";
 import { Input } from "@/components/ui/form";
 import { ConfirmDialog } from "@/components/ui/modal";
 
@@ -16,6 +17,8 @@ export type UserIdentity = {
     age: string;
     occupation: string;
     customSettings: string;
+    /** 拍一拍后缀：别人拍你时显示成「A 拍了拍 你 的 <后缀>」。留空 = 不加后缀。 */
+    pokeSuffix?: string;
 };
 
 const DEFAULT_IDENTITIES: UserIdentity[] = [
@@ -81,6 +84,8 @@ export function UserIdentitySettings() {
     const setIdentities = useCallback((next: UserIdentity[]) => {
         setIdentitiesRaw(next);
         saveUserIdentities(next);
+        // 面具后缀可能刚被改过：广播一下，已打开的聊天气泡立刻重算这句「拍了拍」
+        notifyPokeSuffixChanged();
     }, []);
 
     const addIdentity = useCallback(() => {
@@ -218,6 +223,7 @@ export function UserIdentitySettings() {
                             {(() => {
                                 const identity = identities.find(c => c.id === editingId);
                                 if (!identity) return null;
+                                const pokeSuffixPreview = normalizePokeSuffix(identity.pokeSuffix || "");
                                 return (
                                     <>
                                         {/* Avatar upload + URL */}
@@ -334,6 +340,23 @@ export function UserIdentitySettings() {
                                                 rows={4}
                                                 className="ui-textarea"
                                             />
+                                        </div>
+
+                                        {/* 拍一拍：微信里那张「A 拍了拍 我 的XX」的小字，后缀属于被拍的人。
+                                            角色绑了这张面具，别人拍你时就取这里的后缀；角色侧后缀在会话「聊天信息」里设。 */}
+                                        <div className="flex flex-col gap-1">
+                                            <label className="menu-desc ml-1">设置拍一拍 (Poke Suffix)</label>
+                                            <Input
+                                                type="text"
+                                                value={identity.pokeSuffix || ""}
+                                                onChange={(e) => updateIdentity(identity.id, { pokeSuffix: e.target.value.slice(0, POKE_SUFFIX_MAX_LENGTH) })}
+                                                placeholder="例如：小肚子（留空则不加后缀）"
+                                                className="font-medium"
+                                            />
+                                            <span className="menu-desc ml-1">
+                                                别人拍你时显示为「{identity.name || "某人"} 拍了拍 你 的{pokeSuffixPreview || "…"}」，
+                                                最长 {POKE_SUFFIX_MAX_LENGTH} 字；绑定了这张面具的角色才会用这条后缀
+                                            </span>
                                         </div>
                                     </>
                                 )

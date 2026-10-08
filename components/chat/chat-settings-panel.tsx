@@ -44,7 +44,13 @@ import { downloadFile } from "@/lib/download-utils";
 import { getSchemes, saveScheme, deleteScheme, type CSSScheme } from "@/lib/css-scheme-storage";
 import { CustomStatusFrame } from "@/components/chat/custom-status-frame";
 import { KeyboardAutoSendDebounceItem } from "@/components/chat/keyboard-auto-send-debounce-item";
-import { ChevronRight, Image as ImageIcon, Video, Mic, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
+import { ChevronRight, Hand, Image as ImageIcon, Video, Mic, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
+import {
+    loadSessionPokeSuffix,
+    saveSessionPokeSuffix,
+    normalizePokeSuffix,
+    POKE_SUFFIX_MAX_LENGTH,
+} from "@/lib/poke-suffix";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import { ConfirmDialog } from "@/components/ui/modal";
@@ -415,6 +421,10 @@ export function ChatSettingsPanel({
     const [showConfirmDeleteSession, setShowConfirmDeleteSession] = useState(false);
     const [showConfirmDelete, setShowConfirmDelete] = useState(false);
     const [editingAlias, setEditingAlias] = useState(false);
+    // 拍一拍（角色侧后缀）：按会话存。用户侧后缀在「设置 → 用户身份」的面具卡片里。
+    const [pokeSuffix, setPokeSuffix] = useState<string>(() => loadSessionPokeSuffix(session.id));
+    const [editingPoke, setEditingPoke] = useState(false);
+    const [pokeSuffixDraft, setPokeSuffixDraft] = useState("");
     const [editingBilingualPrompt, setEditingBilingualPrompt] = useState(false);
     const [editingCSS, setEditingCSS] = useState(false);
     const [showScreenEffects, setShowScreenEffects] = useState(false);
@@ -835,6 +845,19 @@ export function ChatSettingsPanel({
                         <div className="menu-label-group"><span className="menu-label">{session.isGroup ? "群聊名称" : "设置备注"}</span></div>
                         <div className="menu-right">
                             <span className="menu-desc mr-1">{session.isGroup ? (groupName || "未设置") : (alias || "无备注")}</span>
+                            <ChevronRight size={16} />
+                        </div>
+                    </button>
+                    <button className="menu-item" onClick={() => { setPokeSuffixDraft(pokeSuffix); setEditingPoke(true); }}>
+                        <ChatInfoIcon icon={Hand} color={BINDING_ACCENTS.identity} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">设置拍一拍</span>
+                            <span className="menu-desc">
+                                {session.isGroup ? "群里角色" : "TA"}被拍时那句小字的后缀；你被拍时的后缀在「设置 → 用户身份」的面具里改
+                            </span>
+                        </div>
+                        <div className="menu-right">
+                            <span className="menu-desc mr-1">{pokeSuffix || "无后缀"}</span>
                             <ChevronRight size={16} />
                         </div>
                     </button>
@@ -1397,6 +1420,42 @@ export function ChatSettingsPanel({
                                 }
                                 setEditingAlias(false);
                             }} className="ui-btn ui-btn-success flex-1">保存</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal: Poke suffix（角色侧：被拍的人才是后缀的主人，TA 被拍用这里，你被拍用面具） */}
+            {editingPoke && (
+                <div className="modal-overlay" onClick={() => setEditingPoke(false)}>
+                    <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+                        <div className="ts-17 font-semibold text-center text-[var(--c-text)]">设置拍一拍</div>
+                        <div className="menu-desc text-center leading-relaxed">
+                            你拍 {session.isGroup ? "群里的角色" : (characterName || "TA")} 时显示为
+                            「你 拍了拍 {session.isGroup ? "TA" : (characterName || "TA")} 的{pokeSuffixDraft.trim() || "…"}」
+                            <br />
+                            {session.isGroup ? "群聊里这条后缀对群内角色通用。" : ""}
+                            你被拍时的后缀在「设置 → 用户身份」的面具卡片里改。
+                        </div>
+                        <Input
+                            type="text"
+                            value={pokeSuffixDraft}
+                            onChange={e => setPokeSuffixDraft(e.target.value.slice(0, POKE_SUFFIX_MAX_LENGTH))}
+                            placeholder="例如：小脑袋（留空则不加后缀）"
+                        />
+                        <div className="flex gap-3 w-full">
+                            <button onClick={() => setEditingPoke(false)} className="ui-btn ui-btn-ghost flex-1">取消</button>
+                            <button
+                                onClick={() => {
+                                    const next = normalizePokeSuffix(pokeSuffixDraft);
+                                    saveSessionPokeSuffix(session.id, next);
+                                    setPokeSuffix(next);
+                                    setEditingPoke(false);
+                                }}
+                                className="ui-btn ui-btn-success flex-1"
+                            >
+                                保存
+                            </button>
                         </div>
                     </div>
                 </div>

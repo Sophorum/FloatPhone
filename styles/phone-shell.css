@@ -231,6 +231,25 @@
   overflow: visible;
 }
 
+/* 真实电量指示器：数字 + 电池图标共用一套颜色。
+   默认跟随状态栏文字色；低电量黄 / 危急红 / 充电绿由 JS 内联注入 color（内联优先级更高）。 */
+.status-battery-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: inherit;
+}
+
+.status-battery-text {
+  font-size: calc(12px * var(--app-text-scale, 1));
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  font-feature-settings: "tnum" 1;
+  color: var(--status-bar-color);
+  transition: color 0.3s ease;
+}
+
 /* ── Hide case mode ── */
 
 .phone-shell-wrap[data-hide-case="1"] {
