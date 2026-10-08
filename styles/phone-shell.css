@@ -231,17 +231,6 @@
   overflow: visible;
 }
 
-/* 真实电量指示器：数字嵌在电池里。
-   外壳、尾巴、数字一律用 currentColor（和信号/WiFi 同一套颜色），
-   只有电量格随 低电量/危急/充电 变色（由组件内联注入 fill）。 */
-.status-battery-num {
-  font-family: inherit;
-  font-size: 7.2px;
-  font-weight: 700;
-  letter-spacing: -0.15px;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ── Hide case mode ── */
 
 .phone-shell-wrap[data-hide-case="1"] {

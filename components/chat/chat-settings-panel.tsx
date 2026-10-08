@@ -852,9 +852,6 @@ export function ChatSettingsPanel({
                         <ChatInfoIcon icon={Hand} color={BINDING_ACCENTS.identity} />
                         <div className="menu-label-group">
                             <span className="menu-label">设置拍一拍</span>
-                            <span className="menu-desc">
-                                {session.isGroup ? "群里角色" : "TA"}被拍时那句小字的后缀；你被拍时的后缀在「设置 → 用户身份」的面具里改
-                            </span>
                         </div>
                         <div className="menu-right">
                             <span className="menu-desc mr-1">{pokeSuffix || "无后缀"}</span>
@@ -1430,18 +1427,11 @@ export function ChatSettingsPanel({
                 <div className="modal-overlay" onClick={() => setEditingPoke(false)}>
                     <div className="modal-dialog" onClick={e => e.stopPropagation()}>
                         <div className="ts-17 font-semibold text-center text-[var(--c-text)]">设置拍一拍</div>
-                        <div className="menu-desc text-center leading-relaxed">
-                            你拍 {session.isGroup ? "群里的角色" : (characterName || "TA")} 时显示为
-                            「你 拍了拍 {session.isGroup ? "TA" : (characterName || "TA")} 的{pokeSuffixDraft.trim() || "…"}」
-                            <br />
-                            {session.isGroup ? "群聊里这条后缀对群内角色通用。" : ""}
-                            你被拍时的后缀在「设置 → 用户身份」的面具卡片里改。
-                        </div>
                         <Input
                             type="text"
                             value={pokeSuffixDraft}
                             onChange={e => setPokeSuffixDraft(e.target.value.slice(0, POKE_SUFFIX_MAX_LENGTH))}
-                            placeholder="例如：小脑袋（留空则不加后缀）"
+                            placeholder="例如：的小脑袋（留空则不加后缀）"
                         />
                         <div className="flex gap-3 w-full">
                             <button onClick={() => setEditingPoke(false)} className="ui-btn ui-btn-ghost flex-1">取消</button>

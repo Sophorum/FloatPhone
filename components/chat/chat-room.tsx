@@ -63,6 +63,7 @@ import type { MemoryWriteRequest, ToolResult } from "@/lib/tool-executor";
 import { formatChatUiTime } from "@/lib/chat-time";
 import { parseActionTags } from "@/lib/action-parser";
 import { kvGet, kvSet, kvRemove } from "@/lib/kv-db";
+import { composePokeLine, loadSessionPokeSuffix } from "@/lib/poke-suffix";
 import { creditWalletBalance, payWithWalletBalance } from "@/lib/wallet-storage";
 import { loadDeliveredShoppingGifts, type ShoppingGiftCandidate } from "@/lib/shopping-gift-utils";
 import { settleShoppingPaymentRequest } from "@/lib/shopping-payment-request";
@@ -5894,13 +5895,19 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                         ) : (
                                             <>
                                                 {msg.mediaType === "poke"
-                                                    ? (() => {
-                                                        const sender = msg.mediaData?.pokeSender || (msg.role === "user" ? "你" : (character?.name || "对方"));
-                                                        const target = msg.mediaData?.pokeTarget || (msg.role === "user" ? (character?.name || "对方") : "你");
-                                                        const displaySender = sender === userIdentity?.name ? "你" : sender;
-                                                        const displayTarget = target === userIdentity?.name ? "你" : target;
-                                                        return `${displaySender} 拍了拍 ${displayTarget}`;
-                                                    })()
+                                                    ? composePokeLine({
+                                                        rawSender: msg.mediaData?.pokeSender,
+                                                        rawTarget: msg.mediaData?.pokeTarget,
+                                                        role: msg.role,
+                                                        userName: userIdentity?.name,
+                                                        charName: (session.isGroup && msg.senderCharacterId
+                                                            ? groupCharMap.get(msg.senderCharacterId)?.name
+                                                            : undefined) || character?.name,
+                                                        inlineSuffix: msg.mediaData?.pokeInlineSuffix,
+                                                        // 拍你 → 面具那格；拍角色 → 会话那格（双击头像拍人走的就是这条）
+                                                        maskSuffix: resolveUserIdentity(session.isGroup ? undefined : session.contactId)?.pokeSuffix,
+                                                        sessionSuffix: loadSessionPokeSuffix(session.id),
+                                                    })
                                                     : formatSysMsgForUI(msg.content, msg)}
                                             </>
                                         )}

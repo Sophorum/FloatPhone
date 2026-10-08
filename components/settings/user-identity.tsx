@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useContext } from "react";
 import { Plus, User, Trash2, FileEdit, AlertCircle, Camera, Link, X, Check } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import { loadUserIdentities, saveUserIdentities } from "@/lib/settings-storage";
-import { POKE_SUFFIX_MAX_LENGTH, normalizePokeSuffix, notifyPokeSuffixChanged } from "@/lib/poke-suffix";
+import { POKE_SUFFIX_MAX_LENGTH, notifyPokeSuffixChanged } from "@/lib/poke-suffix";
 import { Input } from "@/components/ui/form";
 import { ConfirmDialog } from "@/components/ui/modal";
 
@@ -223,7 +223,6 @@ export function UserIdentitySettings() {
                             {(() => {
                                 const identity = identities.find(c => c.id === editingId);
                                 if (!identity) return null;
-                                const pokeSuffixPreview = normalizePokeSuffix(identity.pokeSuffix || "");
                                 return (
                                     <>
                                         {/* Avatar upload + URL */}
@@ -342,23 +341,15 @@ export function UserIdentitySettings() {
                                             />
                                         </div>
 
-                                        {/* 拍一拍：微信里那张「A 拍了拍 我 的XX」的小字，后缀属于被拍的人。
-                                            角色绑了这张面具，别人拍你时就取这里的后缀；角色侧后缀在会话「聊天信息」里设。 */}
                                         <div className="flex flex-col gap-1">
                                             <label className="menu-desc ml-1">设置拍一拍 (Poke Suffix)</label>
                                             <Input
                                                 type="text"
                                                 value={identity.pokeSuffix || ""}
                                                 onChange={(e) => updateIdentity(identity.id, { pokeSuffix: e.target.value.slice(0, POKE_SUFFIX_MAX_LENGTH) })}
-                                                placeholder="例如：小肚子（留空则不加后缀）"
+                                                placeholder="例如：的小肚子（留空则不加后缀）"
                                                 className="font-medium"
                                             />
-                                            <span className="menu-desc ml-1">
-                                                别人拍你时会显示成「&lt;角色名&gt; 拍了拍 你 的{pokeSuffixPreview || "…"}」——
-                                                角色名按会话里的名字/备注填，后缀属于被拍的你。
-                                                <br />
-                                                留空则不加后缀；最长 {POKE_SUFFIX_MAX_LENGTH} 字。绑定了这张面具的角色才用这条后缀
-                                            </span>
                                         </div>
                                     </>
                                 )
