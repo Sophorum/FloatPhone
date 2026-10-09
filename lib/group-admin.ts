@@ -5,6 +5,12 @@
 
 import { ChatSession, loadChatSessions, saveChatSessions } from "./chat-storage";
 import { loadCharacters } from "./character-storage";
+import {
+    buildGroupTitleUpdate,
+    formatGroupTitleBracketText,
+    formatGroupTitleNoticeText,
+    getGroupTitle,
+} from "./group-title";
 
 export const GROUP_SELF_KEY = "self";
 
@@ -15,7 +21,8 @@ export type GroupAdminAction =
     | "kick"
     | "invite"
     | "mute"
-    | "unmute";
+    | "unmute"
+    | "set_title";
 
 export type GroupRole = "owner" | "admin" | "member";
 
@@ -85,7 +92,8 @@ export function canGroupAdminAct(
     if (!isGroupMemberKey(session, actorKey)) return false;
     const actorRole = getGroupRole(session, actorKey);
     if (actorRole === "member") return false;
-    if (actorKey === targetKey && action !== "unmute") return false;
+    // 改自己的头衔也是合法操作，所以 set_title 不受「不能对自己动手」这条限制
+    if (actorKey === targetKey && action !== "unmute" && action !== "set_title") return false;
 
     // Characters targeting the user: kicking is never allowed (the session
     // can't lose its user), muting requires the opt-in switch; handing the
@@ -120,6 +128,14 @@ export function canGroupAdminAct(
             const targetRole = getGroupRole(session, targetKey);
             if (actorRole === "admin" && targetRole === "admin" && actorKey !== targetKey) return false;
             return true;
+        }
+        case "set_title": {
+            // 专属头衔：群主可改所有人（含自己）；管理员可改自己与普通成员，
+            // 动不了群主与其他管理员；普通成员在函数开头已经被挡掉。
+            if (!isGroupMemberKey(session, targetKey)) return false;
+            if (actorKey === targetKey) return true;
+            if (actorRole === "owner") return true;
+            return getGroupRole(session, targetKey) === "member";
         }
         case "invite": {
             // Target must be an existing character not already in the group
@@ -169,8 +185,10 @@ export function buildGroupAdminNoticeText(
     actorName: string,
     targetName: string,
     muteMinutes?: number,
+    title?: string,
 ): string {
     switch (action) {
+        case "set_title": return formatGroupTitleNoticeText(actorName, targetName, title || "");
         case "transfer_owner":
             if (actorName === targetName) return `${actorName}收回了群主身份`;
             return `${actorName}将群主转让给了${targetName}`;
@@ -193,8 +211,10 @@ export function buildGroupAdminBracketText(
     actorName: string,
     targetName: string,
     muteMinutes?: number,
+    title?: string,
 ): string {
     switch (action) {
+        case "set_title": return formatGroupTitleBracketText(actorName, targetName, title || "");
         case "transfer_owner":
             // 上帝按钮收回群主：非协议动作，写成事实陈述即可
             if (actorName === targetName) return `[${actorName}收回了群主身份]`;
@@ -221,9 +241,15 @@ export function applyGroupAdminAction(
     actorKey: string,
     targetKey: string,
     muteMinutes?: number,
+    title?: string,
 ): Partial<ChatSession> {
     const updates: Partial<ChatSession> = {};
     switch (action) {
+        case "set_title": {
+            // 传空串 = 恢复默认头衔（删掉这条，界面回落到群主/管理员默认徽标）
+            Object.assign(updates, buildGroupTitleUpdate(session, targetKey, title || ""));
+            break;
+        }
         case "transfer_owner": {
             updates.groupOwnerId = targetKey;
             // New owner leaves the admin list; ex-owner becomes a plain member
@@ -340,6 +366,15 @@ export function buildGroupRosterMacro(
     if (mutedEntries.length > 0) {
         lines.push(`禁言中：${mutedEntries.join("、")}（被禁言者在解除前不得发出任何群消息，线下场景不受影响）`);
     }
+    // 专属头衔：谁带着什么头衔，以及改头衔的方式（权限与群管理操作同一套）
+    const titledEntries = allKeys
+        .map(key => ({ key, title: getGroupTitle(session, key) }))
+        .filter(entry => entry.title)
+        .map(entry => `${nameOf(entry.key)}（${entry.title}）`);
+    if (titledEntries.length > 0) {
+        lines.push(`专属头衔：${titledEntries.join("、")}`);
+    }
+    lines.push("头衔：群主与管理员可给自己或群友设专属头衔，输出 [设置群头衔:角色名:头衔] 即可（最多6字；角色名写自己名字即改自己；只写 [设置群头衔:角色名] 表示恢复该成员的默认头衔），改完系统会补一条提示。普通成员改了不生效。");
     lines.push("</group_roster>");
     return lines.join("\n");
 }

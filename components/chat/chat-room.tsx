@@ -76,6 +76,8 @@ import {
 } from "@/lib/generated-image-retry";
 import { scrollElementWithinContainer } from "@/lib/dom-scroll";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
+import { GroupTitleBadge } from "./group-title-badge";
+import { getGroupTitle } from "@/lib/group-title";
 import { ChatScreenEffectOverlay, type ActiveScreenEffect } from "./chat-screen-effect";
 import {
     formatChatDiceResultMessage,
@@ -5995,7 +5997,11 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                             {...(isStandaloneHtmlPreview ? { "data-html": "true" } : {})}
                                         >
                                             {session.isGroup && msg.role !== "user" && (
-                                                <span className="chat-group-sender-name">{msg.senderName || ""}{renderGroupRoleBadge(msg.senderCharacterId)}</span>
+                                                <span className="chat-group-sender-name">
+                                                    {/* 专属头衔显示在昵称左侧（没设头衔时这里不占位） */}
+                                                    <GroupTitleBadge title={getGroupTitle(session, msg.senderCharacterId || "")} />
+                                                    {msg.senderName || ""}{renderGroupRoleBadge(msg.senderCharacterId)}
+                                                </span>
                                             )}
                                             <div
                                             {...(editingMessageId !== msg.id ? {

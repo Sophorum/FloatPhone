@@ -831,10 +831,12 @@ export function ApiSettings() {
                 return (
                     <BottomSheet title="选择模型" onClose={() => setModelPickerId(null)}>
                         <div className="flex flex-col gap-2">
+                            {/* 不自动聚焦：手机上弹窗一打开就抢焦点会把软键盘直接顶出来，
+                                要用户自己点一下搜索框才进输入状态 */}
                             <input
                                 type="text"
                                 value={modelQuery}
-                                autoFocus
+                                enterKeyHint="search"
                                 placeholder="搜索模型名…"
                                 onChange={(e) => setModelQuery(e.target.value)}
                                 onKeyDown={(e) => {

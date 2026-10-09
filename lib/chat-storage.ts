@@ -15,6 +15,16 @@ import {
     saveCharacterPokeSuffix,
     stripPokeSuffixDirective,
 } from "./poke-suffix";
+import {
+    GROUP_TITLE_DIRECTIVE,
+    extractGroupTitleDirective,
+    formatGroupTitleBracketText,
+    formatGroupTitleNoticeText,
+    getGroupTitle,
+    resolveGroupTitleChange,
+    stripGroupTitleDirective,
+    type GroupTitleDirectiveChange,
+} from "./group-title";
 import { loadCharacters } from "./character-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
@@ -82,6 +92,10 @@ export type ChatSession = {
     groupOwnerId?: string; // "self" | characterId; legacy groups default to "self", spectator groups to first member
     groupAdminIds?: string[]; // characterId | "self"
     groupMutes?: Record<string, string>; // (characterId | "self") → mute expiry ISO
+    /** 群成员的专属头衔：(characterId | "self") → 头衔；空/缺省 = 显示群主/管理员默认身份徽标 */
+    groupTitles?: Record<string, string>;
+    /** 已处理过的头衔指令原文：同一轮回复被多路径重复落库时用来防重复通知 */
+    groupTitleDirectives?: string[];
     allowAdminActionsOnUser?: boolean; // characters may kick/mute the user (default off)
     isSpectator?: boolean; // 围观群：用户不在群内，只能生成/线下
 };
@@ -125,6 +139,7 @@ export type ChatMessage = {
         | "reading_discuss"
         | "system_instruction"
         | "group_admin_notice"
+        | "group_title_notice"
         | "media_file"
         | `plugin:${string}`; // 聊天插件自定义消息类型（由注册该 kind 的插件渲染气泡）
     origin?: "chat" | "reading_discuss" | "custom_app" | "custom_app_background";
@@ -189,10 +204,11 @@ export type ChatMessage = {
         blackMarketTheaterStartedAt?: string;
         claimer?: string;         // 领取/接受动作的执行人名
         owner?: string;           // 领取/接受动作的目标人名（谁发的红包/转账）
-        adminAction?: "transfer_owner" | "set_admin" | "unset_admin" | "kick" | "invite" | "mute" | "unmute"; // 群管理操作类型
+        adminAction?: "transfer_owner" | "set_admin" | "unset_admin" | "kick" | "invite" | "mute" | "unmute" | "set_title"; // 群管理操作类型
         adminActorName?: string;  // 群管理操作执行人显示名
         adminTargetName?: string; // 群管理操作目标显示名
         adminMuteMinutes?: number;// 禁言时长（分钟）
+        groupTitle?: string;      // 专属头衔变更后的值（空串 = 已恢复默认头衔）
         musicTitle?: string;      // 音乐标题
         musicArtist?: string;     // 音乐歌手
         xiaohongshuAuthor?: string;       // 小红书分享作者
@@ -315,6 +331,7 @@ const MEDIA_PREVIEW_MAP: Record<string, string> = {
     tool_notice: "[执行动作]",
     system_instruction: "[系统指令]",
     media_file: "[文件]",
+    group_title_notice: "[群头衔]",
 };
 
 export function isReadingDiscussMessage(msg: Pick<ChatMessage, "origin" | "mediaType">): boolean {
@@ -352,7 +369,8 @@ export function getChatMessagePreview(msg: ChatMessage): string {
     if (msg.mediaType === "accept_red_packet" || msg.mediaType === "decline_red_packet"
         || msg.mediaType === "accept_transfer" || msg.mediaType === "decline_transfer"
         || msg.mediaType === "accept_payment_request" || msg.mediaType === "decline_payment_request"
-        || msg.mediaType === "group_admin_notice") {
+        || msg.mediaType === "group_admin_notice"
+        || msg.mediaType === "group_title_notice") {
         return toYou(msg.content);
     }
 
@@ -1184,6 +1202,108 @@ function consumePokeSuffixDirective(
     return cleaned;
 }
 
+/** 已处理过的头衔指令只留最近这些条：防重复记账，又不会把会话撑大 */
+const GROUP_TITLE_DIRECTIVE_MEMORY = 20;
+
+/** 名字解析：不引 group-admin（会绕出循环依赖），这里自带一份最小实现 */
+function groupMemberDisplayName(session: ChatSession, key: string): string {
+    if (key === "self") return resolveUserIdentity()?.name || "你";
+    return loadCharacters().find(c => c.id === key)?.name || "群成员";
+}
+
+/**
+ * 把一条头衔指令写进会话，并补一条系统通知。返回是否真的改了头衔。
+ * 权限不足或值没变时不播报（只摘指令 + 记账），避免模型反复刷同一条。
+ */
+function applyGroupTitleChange(
+    sessionId: string,
+    actorKey: string | undefined,
+    change: GroupTitleDirectiveChange,
+): boolean {
+    const session = _sessionsCache.find(s => s.id === sessionId);
+    if (!session || !session.isGroup || !actorKey) return false;
+
+    // 同一段文本会被多路径重复落库（占位消息一次、整批重建再一次），
+    // 用指令原文记一笔，保证数据只改一次、通知只发一条
+    if ((session.groupTitleDirectives || []).includes(change.raw)) return false;
+    const remember = (target: ChatSession) => {
+        const raws = [...(target.groupTitleDirectives || []), change.raw];
+        target.groupTitleDirectives = raws.slice(-GROUP_TITLE_DIRECTIVE_MEMORY);
+    };
+
+    const resolved = resolveGroupTitleChange({
+        session,
+        actorKey,
+        userName: resolveUserIdentity()?.name,
+        targetName: change.targetName,
+        title: change.title,
+    });
+
+    const sessions = loadChatSessions();
+    const idx = sessions.findIndex(s => s.id === sessionId);
+    if (idx === -1) return false;
+    const target = sessions[idx];
+
+    // 权限不足 / 目标不存在：只记账，不改头衔也不提示
+    if (!resolved.ok) {
+        remember(target);
+        saveChatSessions(sessions);
+        Object.assign(session, { groupTitleDirectives: target.groupTitleDirectives });
+        return false;
+    }
+
+    const previous = getGroupTitle(target, resolved.targetKey);
+    const changed = previous !== resolved.title;
+
+    const titles = { ...(target.groupTitles || {}) };
+    if (resolved.title) titles[resolved.targetKey] = resolved.title;
+    else delete titles[resolved.targetKey];
+    target.groupTitles = titles;
+    remember(target);
+    saveChatSessions(sessions);
+    Object.assign(session, {
+        groupTitles: titles,
+        groupTitleDirectives: target.groupTitleDirectives,
+    });
+
+    if (!changed) return false;
+
+    const actorName = groupMemberDisplayName(session, actorKey);
+    const targetName = groupMemberDisplayName(session, resolved.targetKey);
+    pushChatMessage({
+        sessionId,
+        // role=system：头衔变更是一条系统通知，渲染成小字、不占气泡
+        role: "system",
+        content: formatGroupTitleNoticeText(actorName, targetName, resolved.title),
+        mediaType: "group_title_notice",
+        mediaData: {
+            adminAction: "set_title",
+            adminActorName: actorName,
+            adminTargetName: targetName,
+            groupTitle: resolved.title,
+        },
+    });
+    return true;
+}
+
+/**
+ * [设置群头衔:目标:头衔] 落库前摘除并生效。
+ * strict=true 时只认带目标名的写法（群聊整轮重建里一段文本归属已定，写不出目标名就只摘不执行）。
+ */
+function consumeGroupTitleDirective(
+    text: string | undefined,
+    sessionId: string,
+    senderCharacterId?: string,
+    strict = false,
+): string | undefined {
+    if (!text || !text.includes(GROUP_TITLE_DIRECTIVE)) return text;
+    const { text: cleaned, change } = extractGroupTitleDirective(text);
+    if (!change) return text;
+    if (strict && !change.targetName.trim()) return cleaned;
+    applyGroupTitleChange(sessionId, senderCharacterId, change);
+    return cleaned;
+}
+
 export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "status"> & {
     status?: ChatMessageStatus;
     createdAt?: string;
@@ -1212,6 +1332,16 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
                 ...newMsg,
                 ...(cleanedContent !== undefined ? { content: cleanedContent } : {}),
                 ...(cleanedRaw !== undefined ? { rawResponseText: cleanedRaw } : {}),
+            };
+        }
+        // 角色改群头衔：[设置群头衔:目标:头衔] 同样不进气泡；权限不足只摘指令、不改数据
+        const titleContent = consumeGroupTitleDirective(newMsg.content, newMsg.sessionId, newMsg.senderCharacterId);
+        const titleRaw = consumeGroupTitleDirective(newMsg.rawResponseText, newMsg.sessionId, newMsg.senderCharacterId);
+        if ((titleContent !== undefined && titleContent !== newMsg.content) || titleRaw !== newMsg.rawResponseText) {
+            newMsg = {
+                ...newMsg,
+                ...(titleContent !== undefined ? { content: titleContent } : {}),
+                ...(titleRaw !== undefined ? { rawResponseText: titleRaw } : {}),
             };
         }
     }
@@ -1302,6 +1432,12 @@ function messageToEditableRawPart(message: ChatMessage): string {
         const sender = message.mediaData?.pokeSender?.trim();
         const target = message.mediaData?.pokeTarget?.trim();
         if (sender && target) return `[${sender}拍了拍${target}]`;
+    }
+    // 头衔变更还原成协议标签：整批重建时读回来还是同一件事，不会被当台词改坏
+    if (message.mediaType === "group_title_notice") {
+        const actor = message.mediaData?.adminActorName?.trim();
+        const target = message.mediaData?.adminTargetName?.trim();
+        if (actor && target) return formatGroupTitleBracketText(actor, target, message.mediaData?.groupTitle || "");
     }
     if (message.mediaType === "image") {
         const label = message.mediaData?.label?.trim() || message.content.trim();
@@ -2037,7 +2173,11 @@ export function replaceResponseBatchWithParts(
 
     // 角色自改拍一拍：占位消息那一步可能已经生效过（幂等，写同样的值）；
     // 存下来的 raw 也顺手摘干净，免得之后编辑重放又把它当台词显示。
-    const cleanedRawResponseText = consumePokeSuffixDirective(rawResponseText, sessionId, firstMessage.senderCharacterId) ?? rawResponseText;
+    const cleanedRawResponseText = consumeGroupTitleDirective(
+        consumePokeSuffixDirective(rawResponseText, sessionId, firstMessage.senderCharacterId) ?? rawResponseText,
+        sessionId,
+        firstMessage.senderCharacterId,
+    ) ?? rawResponseText;
 
     const deletedIds = batchMessages.map(m => m.id);
     _messagesCache = _messagesCache.filter(m => !deletedIds.includes(m.id));
@@ -2048,7 +2188,7 @@ export function replaceResponseBatchWithParts(
         id: createMessageId(),
         sessionId,
         role: firstMessage.role,
-        content: stripPokeSuffixDirective(part.content),
+        content: stripGroupTitleDirective(stripPokeSuffixDirective(part.content)),
         mediaType: part.mediaType,
         origin: firstMessage.origin,
         mediaData: part.mediaData,
@@ -2170,7 +2310,7 @@ export function replaceGroupResponseRound(
         id: createMessageId(),
         sessionId,
         role: firstMessage.role,
-        content: stripPokeSuffixDirective(msg.content),
+        content: stripGroupTitleDirective(stripPokeSuffixDirective(msg.content)),
         mediaType: msg.mediaType,
         origin: firstMessage.origin,
         mediaData: msg.mediaData,
@@ -2178,8 +2318,14 @@ export function replaceGroupResponseRound(
         createdAt: new Date(baseTime + index).toISOString(),
         order: baseOrder + index * 0.001,
         responseBatchId: msg.responseBatchId,
-        // 群聊整轮重建：每个角色各自认领自己的 [设置拍一拍:后缀]
-        rawResponseText: consumePokeSuffixDirective(msg.rawResponseText, sessionId, msg.senderCharacterId),
+        // 群聊整轮重建：每个角色各自认领自己的 [设置拍一拍:后缀] 与 [设置群头衔:目标:头衔]。
+        // 头衔指令走 strict：这一段归属已定，写不出目标名的就只摘不执行
+        rawResponseText: consumeGroupTitleDirective(
+            consumePokeSuffixDirective(msg.rawResponseText, sessionId, msg.senderCharacterId),
+            sessionId,
+            msg.senderCharacterId,
+            true,
+        ),
         responseRoundId,
         editableResponseText,
         cloudSync: firstMessage.cloudSync,

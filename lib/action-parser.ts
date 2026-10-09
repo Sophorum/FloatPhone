@@ -190,6 +190,8 @@ const KNOWN_ACTION_TAGS = [
     "chat_context", "chat_format", "chat_rich_actions", "chat_output_format",
     // 加好友
     "add_friend_prompt", "添加好友",
+    // 角色自改指令（模型偶尔会连空标签一起吐出来）
+    "设置拍一拍", "设置群头衔",
 ];
 
 /**

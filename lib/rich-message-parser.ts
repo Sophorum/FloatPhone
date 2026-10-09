@@ -15,6 +15,7 @@ import { parseStateValues, mergeStateValues } from "./state-value-parser";
 import { stripActionShells } from "./action-parser";
 import { stripTextToolDirectives } from "./text-tool-protocol";
 import { splitPokeTarget, stripPokeSuffixDirective } from "./poke-suffix";
+import { formatGroupTitleNoticeText, stripGroupTitleDirective } from "./group-title";
 import {
     formatCustomAppDirectiveSummary,
     getCustomAppDirectiveSyntaxHead,
@@ -355,6 +356,24 @@ const RICH_PATTERNS: {
         regex: /\[([^\]]+?)解除了([^\]]+?)的禁言\]/,
         build: (m) => ({ content: "", mediaType: "group_admin_notice" as const, mediaData: { adminAction: "unmute" as const, adminActorName: m[1]?.trim(), adminTargetName: m[2]?.trim() } }),
     },
+    // 专属头衔变更：模型把变更事实写回正文时也渲染成系统小字（与本地的头衔通知同形）。
+    // 「自己」的两种写法要排在通用写法之前，否则会被拆成「小明恢复了自己的」+「默认头衔」。
+    {
+        regex: /\[([^\]]+?)恢复了自己的默认头衔\]/,
+        build: (m) => buildGroupTitleNoticePart(m[1], m[1], ""),
+    },
+    {
+        regex: /\[([^\]]+?)把自己的头衔设为了([^\]]+?)\]/,
+        build: (m) => buildGroupTitleNoticePart(m[1], m[1], m[2]),
+    },
+    {
+        regex: /\[([^\]]+?)恢复了([^\]]+?)的默认头衔\]/,
+        build: (m) => buildGroupTitleNoticePart(m[1], m[2], ""),
+    },
+    {
+        regex: /\[([^\]]+?)将([^\]]+?)的头衔设为了([^\]]+?)\]/,
+        build: (m) => buildGroupTitleNoticePart(m[1], m[2], m[3]),
+    },
     // 1:1 简单格式（兼容）
     {
         regex: /\[领取红包\]/,
@@ -513,6 +532,23 @@ function buildCustomAppDirectivePart(
     };
 }
 
+/** 头衔变更的系统小字：正文与媒体字段都填好，气泡与列表预览共用同一份文案 */
+function buildGroupTitleNoticePart(actor?: string, target?: string, title?: string): ParsedMessagePart {
+    const actorName = (actor || "").trim() || "有人";
+    const targetName = (target || "").trim() || actorName;
+    const value = (title || "").trim();
+    return {
+        content: formatGroupTitleNoticeText(actorName, targetName, value),
+        mediaType: "group_title_notice" as const,
+        mediaData: {
+            adminAction: "set_title" as const,
+            adminActorName: actorName,
+            adminTargetName: targetName,
+            groupTitle: value,
+        },
+    };
+}
+
 function findBuiltInRichCandidate(segment: string): RichPatternCandidate | null {
     let best: { index: number; m: RegExpMatchArray; build: (m: RegExpMatchArray) => ParsedMessagePart } | null = null;
     for (const { regex, build } of RICH_PATTERNS) {
@@ -605,9 +641,10 @@ function parseSegment(segment: string, parts: ParsedMessagePart[]) {
 // ── Main parser ──────────────────────────────────────────
 
 export function parseAIResponse(rawText: string, previousState: StateValue[]): ParsedAIResponse {
-    // 0. 先摘掉角色的自改拍一拍指令 [设置拍一拍:后缀]：它是指令不是台词，绝不能漏进气泡。
-    //    真正的落库/生效在 chat-storage 的保存路径上做（那里才知道是哪个角色写的）。
-    const source = stripPokeSuffixDirective(rawText);
+    // 0. 先摘掉角色的自改指令（[设置拍一拍:后缀] / [设置群头衔:目标:头衔]）：
+    //    它们是指令不是台词，绝不能漏进气泡。真正的落库/生效与权限判定在
+    //    chat-storage 的保存路径上做（那里才知道是谁写的、在哪个群）。
+    const source = stripGroupTitleDirective(stripPokeSuffixDirective(rawText));
 
     // 0.1. FIRST: extract ```html blocks and <style>+HTML before any processing
     const htmlBlockPlaceholders: { placeholder: string; original: string }[] = [];

@@ -186,6 +186,8 @@ import {
     DEFAULT_OFFLINE_CHAT_BILINGUAL_PROMPT,
 } from "@/lib/bilingual-prompt-defaults";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
+import { GroupTitleBadge } from "./group-title-badge";
+import { GROUP_TITLE_MAX_LENGTH, canSetGroupTitle, getGroupTitle, normalizeGroupTitle } from "@/lib/group-title";
 import { MessageBubble, isStandaloneHtmlPreviewContent } from "./message-bubble";
 import { ScreenEffectSettingsModal } from "./screen-effect-settings-modal";
 
@@ -232,6 +234,7 @@ const SEARCH_VISUAL_MEDIA_TYPES = new Set<SearchResultMediaType>([
 
 const SEARCH_ACTION_MEDIA_TYPES = new Set<SearchResultMediaType>([
     "poke",
+    "group_title_notice",
     "accept_red_packet",
     "decline_red_packet",
     "accept_transfer",
@@ -252,6 +255,8 @@ function isSearchHiddenMessage(msg: ChatMessage): boolean {
         || msg.mediaType === "tool_result"
         || msg.mediaType === "tool_notice"
         || msg.mediaType === "memory_write_request"
+        // 拍一拍是即时小动作、不是聊天内容：不进搜索结果（搜「拍了拍」会整屏都是它）
+        || msg.mediaType === "poke"
         || Boolean(msg.nativeToolCalls?.length && !msg.content.trim());
 }
 
@@ -441,6 +446,9 @@ export function ChatSettingsPanel({
         window.addEventListener(POKE_SUFFIX_UPDATED_EVENT, onExternalWrite);
         return () => window.removeEventListener(POKE_SUFFIX_UPDATED_EVENT, onExternalWrite);
     }, []);
+    // 群成员专属头衔：编辑在独立页面（群成员管理 → 点成员 → 编辑专属头衔）
+    const [titleEditingKey, setTitleEditingKey] = useState<string | null>(null);
+    const [titleDraft, setTitleDraft] = useState("");
     const [editingBilingualPrompt, setEditingBilingualPrompt] = useState(false);
     const [editingCSS, setEditingCSS] = useState(false);
     const [showScreenEffects, setShowScreenEffects] = useState(false);
@@ -565,7 +573,7 @@ export function ChatSettingsPanel({
         const role = getGroupRole(session, key);
         return role === "owner" ? "群主" : role === "admin" ? "管理员" : "";
     };
-    type MemberEntry = { key: string; name: string; avatar?: string; muteMs: number };
+    type MemberEntry = { key: string; name: string; avatar?: string; muteMs: number; title: string };
     const memberEntries: MemberEntry[] = session.isGroup
         ? [
             ...(session.isSpectator ? [] : [{
@@ -573,18 +581,22 @@ export function ChatSettingsPanel({
                 name: `${userName}（我）`,
                 avatar: userIdentity?.avatarUrl || undefined,
                 muteMs: getGroupMuteRemainingMs(session, GROUP_SELF_KEY),
+                title: getGroupTitle(session, GROUP_SELF_KEY),
             }]),
             ...groupChars.map(c => ({
                 key: c!.id,
                 name: c!.name,
                 avatar: c!.avatar || undefined,
                 muteMs: getGroupMuteRemainingMs(session, c!.id),
+                title: getGroupTitle(session, c!.id),
             })),
         ]
         : [];
     const memberActionsFor = (key: string): { action: GroupAdminAction; label: string; danger?: boolean }[] => {
         if (!session.isGroup || session.isSpectator) return [];
         const items: { action: GroupAdminAction; label: string; danger?: boolean }[] = [];
+        // 专属头衔：群主改所有人，管理员改自己与普通成员（放最前面，最常用）
+        if (canSetGroupTitle(session, GROUP_SELF_KEY, key)) items.push({ action: "set_title", label: "编辑专属头衔" });
         if (canGroupAdminAct(session, GROUP_SELF_KEY, "transfer_owner", key)) items.push({ action: "transfer_owner", label: "转让群主" });
         if (canGroupAdminAct(session, GROUP_SELF_KEY, "set_admin", key)) items.push({ action: "set_admin", label: "设为管理员" });
         if (canGroupAdminAct(session, GROUP_SELF_KEY, "unset_admin", key)) items.push({ action: "unset_admin", label: "取消管理员" });
@@ -617,6 +629,27 @@ export function ChatSettingsPanel({
         setMemberActionKey(null);
         setMutePickerKey(null);
         setShowInvitePicker(false);
+        setRosterVersion(v => v + 1);
+    };
+    /** 改专属头衔：写会话 + 补一条系统通知（传空串 = 恢复默认头衔） */
+    const performTitleChange = (targetKey: string, nextTitle: string) => {
+        if (!canSetGroupTitle(session, GROUP_SELF_KEY, targetKey)) return;
+        const targetName = getGroupMemberDisplayName(targetKey, userName);
+        const normalized = normalizeGroupTitle(nextTitle);
+        if (getGroupTitle(session, targetKey) === normalized) return;
+        applyGroupAdminAction(session, "set_title", GROUP_SELF_KEY, targetKey, undefined, normalized);
+        pushChatMessage({
+            sessionId: session.id,
+            role: "system",
+            content: buildGroupAdminNoticeText("set_title", userName, targetName, undefined, normalized),
+            mediaType: "group_title_notice",
+            mediaData: {
+                adminAction: "set_title",
+                adminActorName: userName,
+                adminTargetName: targetName,
+                groupTitle: normalized,
+            },
+        });
         setRosterVersion(v => v + 1);
     };
     // 上帝按钮：不走权限矩阵，防止用户把自己锁死
@@ -947,7 +980,11 @@ export function ChatSettingsPanel({
                                         {entry.avatar ? <img src={entry.avatar} className="w-full h-full object-cover" alt="" /> : <ChatFallbackAvatar />}
                                     </div>
                                     <div className="menu-label-group">
-                                        <span className="menu-label">{entry.name}</span>
+                                        <span className="menu-label flex items-center min-w-0">
+                                            {/* 专属头衔显示在昵称左侧 */}
+                                            <GroupTitleBadge title={entry.title} />
+                                            <span className="truncate">{entry.name}</span>
+                                        </span>
                                         {entry.muteMs > 0 && (
                                             <span className="menu-desc">禁言中 · 剩余{formatMuteRemainingLabel(entry.muteMs)}</span>
                                         )}
@@ -1375,6 +1412,11 @@ export function ChatSettingsPanel({
                                         if (item.action === "mute") {
                                             setMutePickerKey(memberActionKey);
                                             setMemberActionKey(null);
+                                        } else if (item.action === "set_title") {
+                                            // 头衔在独立页面里改：先带上当前值，再关掉这个小菜单
+                                            setTitleDraft(getGroupTitle(session, memberActionKey));
+                                            setTitleEditingKey(memberActionKey);
+                                            setMemberActionKey(null);
                                         } else {
                                             performAdminAction(item.action, memberActionKey);
                                         }
@@ -1677,6 +1719,61 @@ export function ChatSettingsPanel({
                 </div>
             )}
 
+            {/* Sub-page: 编辑专属头衔（仅群聊；最多 6 字，可一键恢复默认头衔） */}
+            {titleEditingKey && (
+                <div style={{ position: "absolute", inset: 0, zIndex: 9999, background: "#ffffff" }}>
+                <div style={{ position: "absolute", inset: 0, background: "var(--c-page-body-bg)" }}>
+                    <PageShell title="编辑专属头衔" onBack={() => setTitleEditingKey(null)}>
+                        <div className="theme-section-page">
+                            <p className="ts-13 text-[var(--c-text)] mb-3 leading-relaxed">
+                                {getGroupMemberDisplayName(titleEditingKey, userName)} 的专属头衔会显示在群昵称左侧，
+                                最多 {GROUP_TITLE_MAX_LENGTH} 个字。
+                            </p>
+                            <Input
+                                type="text"
+                                autoFocus
+                                value={titleDraft}
+                                maxLength={GROUP_TITLE_MAX_LENGTH}
+                                onChange={e => setTitleDraft(e.target.value.slice(0, GROUP_TITLE_MAX_LENGTH))}
+                                placeholder="例如：首席吐槽官"
+                            />
+                            <div className="flex items-center justify-between mt-2 mb-4">
+                                <span className="menu-desc">{titleDraft.length}/{GROUP_TITLE_MAX_LENGTH}</span>
+                                <span className="menu-desc">留空保存 = 恢复默认头衔</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    className="ui-btn ui-btn-outline flex-1"
+                                    onClick={() => {
+                                        const key = titleEditingKey;
+                                        setTitleDraft("");
+                                        performTitleChange(key, "");
+                                        setTitleEditingKey(null);
+                                    }}
+                                >
+                                    恢复默认头衔
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ui-btn ui-btn-primary flex-1"
+                                    onClick={() => {
+                                        performTitleChange(titleEditingKey, titleDraft);
+                                        setTitleEditingKey(null);
+                                    }}
+                                >
+                                    保存
+                                </button>
+                            </div>
+                            <p className="menu-desc mt-3 leading-relaxed">
+                                恢复默认头衔后，群主/管理员会重新显示身份徽标；普通成员则不再显示头衔。
+                            </p>
+                        </div>
+                    </PageShell>
+                </div>
+                </div>
+            )}
+
             {/* Sub-page: TA 的电脑 */}
             {showComputer && (
                 <CharacterComputerPage
@@ -1717,6 +1814,12 @@ export function ChatSettingsPanel({
                                 <Search size={20} strokeWidth={2.1} />
                             </button>
                         </div>
+                        {/* 结果条数：就贴在搜索框下方，一眼知道这次搜到多少 */}
+                        {searchMode && !isSearching && (
+                            <div className="px-4 pb-2">
+                                <span className="menu-desc">共 {searchResults.length} 条搜索结果</span>
+                            </div>
+                        )}
                         <div className="flex flex-col gap-4 px-4 pb-4">
                             {!searchMode && searchHistoryMessages.length === 0 && (
                                 <div className="ui-empty">
