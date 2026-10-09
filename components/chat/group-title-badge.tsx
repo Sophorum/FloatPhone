@@ -1,35 +1,37 @@
 "use client";
 
-// 群成员专属头衔徽标：放在昵称左侧的小标签。
-// 没有头衔时返回 null（此时由调用方决定是否显示群主/管理员这类默认身份徽标）。
-// 样式用内联写死，避免为了一个小角标去动全局样式表。
+// 群成员标签角标：挂在昵称左侧，一个成员只挂一个。
+// 有专属头衔 → 显示头衔；没设头衔 → 回落显示群主/管理员；普通成员又没头衔就没有角标。
+// 头衔顶掉的是「群主/管理员」这几个字，配色仍然表示群内身份
+// （群主橙、管理员蓝、普通成员灰），所以头衔不会变成第二个标签。
+// 身份按当前群状态实时计算：被移出群聊、卸任后，旧消息上的角标也跟着消失。
 
-export function GroupTitleBadge({ title, className }: { title?: string; className?: string }) {
-    const value = (title || "").trim();
-    if (!value) return null;
+import type { ChatSession } from "@/lib/chat-storage";
+import { getGroupRole, isGroupMemberKey } from "@/lib/group-admin";
+import { getGroupTitle } from "@/lib/group-title";
+
+export function GroupMemberBadge({ session, memberKey, className }: {
+    session: ChatSession;
+    memberKey?: string | null;
+    className?: string;
+}) {
+    if (!session.isGroup || !memberKey) return null;
+    if (!isGroupMemberKey(session, memberKey)) return null;
+
+    const title = getGroupTitle(session, memberKey).trim();
+    const role = getGroupRole(session, memberKey);
+    const roleLabel = role === "owner" ? "群主" : role === "admin" ? "管理员" : "";
+    const text = title || roleLabel;
+    if (!text) return null;
+
+    // 留着 chat-group-title-badge 这个类名：写给头衔的自定义 CSS 还能命中
+    const tone = role === "owner" ? "owner" : role === "admin" ? "admin" : "member";
     return (
         <span
-            className={`chat-group-title-badge ${className ?? ""}`}
-            title={value}
-            style={{
-                display: "inline-flex",
-                alignItems: "center",
-                flex: "0 0 auto",
-                maxWidth: 84,
-                marginRight: 4,
-                padding: "0 5px",
-                borderRadius: 6,
-                fontSize: "calc(10px*var(--app-text-scale,1))",
-                fontWeight: 600,
-                lineHeight: "16px",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                color: "var(--c-icon-active, #576b95)",
-                background: "color-mix(in srgb, var(--c-icon-active, #576b95) 14%, transparent)",
-            }}
+            className={`chat-role-badge chat-role-badge-${tone}${title ? " chat-group-title-badge" : ""}${className ? ` ${className}` : ""}`}
+            title={title || roleLabel}
         >
-            {value}
+            {text}
         </span>
     );
 }

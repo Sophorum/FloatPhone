@@ -186,7 +186,7 @@ import {
     DEFAULT_OFFLINE_CHAT_BILINGUAL_PROMPT,
 } from "@/lib/bilingual-prompt-defaults";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
-import { GroupTitleBadge } from "./group-title-badge";
+import { GroupMemberBadge } from "./group-title-badge";
 import { GROUP_TITLE_MAX_LENGTH, canSetGroupTitle, getGroupTitle, normalizeGroupTitle } from "@/lib/group-title";
 import { MessageBubble, isStandaloneHtmlPreviewContent } from "./message-bubble";
 import { ScreenEffectSettingsModal } from "./screen-effect-settings-modal";
@@ -573,7 +573,7 @@ export function ChatSettingsPanel({
         const role = getGroupRole(session, key);
         return role === "owner" ? "群主" : role === "admin" ? "管理员" : "";
     };
-    type MemberEntry = { key: string; name: string; avatar?: string; muteMs: number; title: string };
+    type MemberEntry = { key: string; name: string; avatar?: string; muteMs: number };
     const memberEntries: MemberEntry[] = session.isGroup
         ? [
             ...(session.isSpectator ? [] : [{
@@ -581,14 +581,12 @@ export function ChatSettingsPanel({
                 name: `${userName}（我）`,
                 avatar: userIdentity?.avatarUrl || undefined,
                 muteMs: getGroupMuteRemainingMs(session, GROUP_SELF_KEY),
-                title: getGroupTitle(session, GROUP_SELF_KEY),
             }]),
             ...groupChars.map(c => ({
                 key: c!.id,
                 name: c!.name,
                 avatar: c!.avatar || undefined,
                 muteMs: getGroupMuteRemainingMs(session, c!.id),
-                title: getGroupTitle(session, c!.id),
             })),
         ]
         : [];
@@ -833,13 +831,8 @@ export function ChatSettingsPanel({
                         <div className={`chat-msg-content-wrap flex flex-col min-w-0 max-w-[70%] ${isStandaloneHtmlPreview ? "chat-msg-content-wrap-html" : ""}`}>
                             {session.isGroup && msg.role !== "user" && (
                                 <span className="chat-group-sender-name">
+                                    <GroupMemberBadge session={session} memberKey={msg.senderCharacterId} />
                                     {senderName}
-                                    {msg.senderCharacterId && (session.participantIds || []).includes(msg.senderCharacterId) && (() => {
-                                        const role = getGroupRole(session, msg.senderCharacterId);
-                                        if (role === "owner") return <span className="chat-role-badge chat-role-badge-owner">群主</span>;
-                                        if (role === "admin") return <span className="chat-role-badge chat-role-badge-admin">管理员</span>;
-                                        return null;
-                                    })()}
                                 </span>
                             )}
                             <div
@@ -967,7 +960,6 @@ export function ChatSettingsPanel({
                             </div>
                         </div>
                         {memberEntries.map(entry => {
-                            const badge = roleLabel(entry.key);
                             const actionable = memberActionsFor(entry.key).length > 0;
                             return (
                                 <button
@@ -981,8 +973,8 @@ export function ChatSettingsPanel({
                                     </div>
                                     <div className="menu-label-group">
                                         <span className="menu-label flex items-center min-w-0">
-                                            {/* 专属头衔显示在昵称左侧 */}
-                                            <GroupTitleBadge title={entry.title} />
+                                            {/* 一个成员只挂一个角标：专属头衔优先，没设头衔时回落群主/管理员 */}
+                                            <GroupMemberBadge session={session} memberKey={entry.key} />
                                             <span className="truncate">{entry.name}</span>
                                         </span>
                                         {entry.muteMs > 0 && (
@@ -990,7 +982,6 @@ export function ChatSettingsPanel({
                                         )}
                                     </div>
                                     <div className="menu-right">
-                                        {badge && <span className="menu-desc mr-1">{badge}</span>}
                                         {actionable && <ChevronRight size={14} />}
                                     </div>
                                 </button>
@@ -1726,7 +1717,7 @@ export function ChatSettingsPanel({
                     <PageShell title="编辑专属头衔" onBack={() => setTitleEditingKey(null)}>
                         <div className="theme-section-page">
                             <p className="ts-13 text-[var(--c-text)] mb-3 leading-relaxed">
-                                {getGroupMemberDisplayName(titleEditingKey, userName)} 的专属头衔会显示在群昵称左侧，
+                                {getGroupMemberDisplayName(titleEditingKey, userName)} 的专属头衔会顶掉群昵称左侧的身份角标（群主/管理员），
                                 最多 {GROUP_TITLE_MAX_LENGTH} 个字。
                             </p>
                             <Input
@@ -1766,7 +1757,7 @@ export function ChatSettingsPanel({
                                 </button>
                             </div>
                             <p className="menu-desc mt-3 leading-relaxed">
-                                恢复默认头衔后，群主/管理员会重新显示身份徽标；普通成员则不再显示头衔。
+                                恢复默认头衔后，群主/管理员回到身份角标，普通成员则不再显示角标。
                             </p>
                         </div>
                     </PageShell>

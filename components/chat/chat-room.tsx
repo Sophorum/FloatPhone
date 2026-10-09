@@ -76,8 +76,7 @@ import {
 } from "@/lib/generated-image-retry";
 import { scrollElementWithinContainer } from "@/lib/dom-scroll";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
-import { GroupTitleBadge } from "./group-title-badge";
-import { getGroupTitle } from "@/lib/group-title";
+import { GroupMemberBadge } from "./group-title-badge";
 import { ChatScreenEffectOverlay, type ActiveScreenEffect } from "./chat-screen-effect";
 import {
     formatChatDiceResultMessage,
@@ -3192,15 +3191,11 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         return text;
     };
 
-    // QQ 式头衔徽标：群主/管理员，按当前群身份实时计算（被踢/卸任后旧消息不再显示）
-    const renderGroupRoleBadge = (senderCharacterId?: string) => {
-        if (!session.isGroup || !senderCharacterId) return null;
-        if (!(session.participantIds || []).includes(senderCharacterId)) return null;
-        const role = getGroupRole(session, senderCharacterId);
-        if (role === "owner") return <span className="chat-role-badge chat-role-badge-owner">群主</span>;
-        if (role === "admin") return <span className="chat-role-badge chat-role-badge-admin">管理员</span>;
-        return null;
-    };
+    // 群成员角标：昵称左侧只挂一个——有专属头衔就显示头衔，没设头衔时回落群主/管理员
+    // （身份按当前群状态实时计算，被踢/卸任后旧消息不再显示；实现见 GroupMemberBadge）
+    const renderGroupMemberBadge = (senderCharacterId?: string) => (
+        <GroupMemberBadge session={session} memberKey={senderCharacterId} />
+    );
 
     const runManagedGeneration = async ({
         history,
@@ -5744,7 +5739,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                                 <div key={gMsg.id} className={`flex ${gMsg.role === "user" ? "justify-end" : "justify-start"}`}>
                                                     <div className="flex flex-col min-w-0 max-w-[75%]">
                                                         {session.isGroup && gMsg.role !== "user" && (
-                                                            <span className="chat-group-sender-name">{gMsg.senderName || ""}{renderGroupRoleBadge(gMsg.senderCharacterId)}</span>
+                                                            <span className="chat-group-sender-name">{renderGroupMemberBadge(gMsg.senderCharacterId)}{gMsg.senderName || ""}</span>
                                                         )}
                                                         <div
                                                             onPointerDown={(e) => { e.stopPropagation(); handleMessagePointerDown(e, gMsg.id); }}
@@ -5998,9 +5993,9 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                         >
                                             {session.isGroup && msg.role !== "user" && (
                                                 <span className="chat-group-sender-name">
-                                                    {/* 专属头衔显示在昵称左侧（没设头衔时这里不占位） */}
-                                                    <GroupTitleBadge title={getGroupTitle(session, msg.senderCharacterId || "")} />
-                                                    {msg.senderName || ""}{renderGroupRoleBadge(msg.senderCharacterId)}
+                                                    {/* 昵称左侧只挂一个角标：专属头衔优先，没设头衔时回落群主/管理员 */}
+                                                    {renderGroupMemberBadge(msg.senderCharacterId)}
+                                                    {msg.senderName || ""}
                                                 </span>
                                             )}
                                             <div
@@ -6152,7 +6147,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
                                                 </div>
                                             </div>
                                             <div className="chat-msg-content-wrap flex flex-col min-w-0 max-w-[70%]">
-                                                <span className="chat-group-sender-name">{part.characterName}</span>
+                                                <span className="chat-group-sender-name">{renderGroupMemberBadge(part.characterId)}{part.characterName}</span>
                                                 <div className="chat-bubble-role-assistant chat-stream-bubble break-words rounded-md px-3 py-2">
                                                     {/* 流式预览用轻量 pre-wrap 渲染：避免每帧跑 markdown/双语解析导致闪烁卡顿 */}
                                                     <div className="chat-stream-text whitespace-pre-wrap break-words">{segText}</div>

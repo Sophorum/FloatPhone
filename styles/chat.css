@@ -1350,10 +1350,13 @@
   white-space: nowrap;
 }
 
-/* ── QQ-style group role badges (群主/管理员) ── */
+/* ── QQ-style group member badges（群主/管理员/专属头衔）──
+   角标一律挂在昵称左侧，一个成员只挂一个：有专属头衔就显示头衔，
+   没设头衔时回落显示群主/管理员。配色始终表示群内身份：
+   群主橙、管理员蓝、普通成员（没有身份）灰。 */
 .chat-role-badge {
   display: inline-block;
-  margin-left: 4px;
+  margin-right: 4px;
   padding: 0 4px;
   font-size: calc(9px*var(--app-text-scale,1));
   line-height: 1.55;
@@ -1361,9 +1364,15 @@
   color: #fff;
   font-weight: 500;
   vertical-align: 1px;
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-role-badge-owner { background: #f0a020; }
 .chat-role-badge-admin { background: #4f9cf0; }
+/* 普通成员拿到的专属头衔：同款角标，灰底 */
+.chat-role-badge-member { background: #9aa0a6; }
 
 /* ── Media message bubble (transparent bg) ── */
 .chat-bubble-media {
