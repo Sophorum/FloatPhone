@@ -8,7 +8,13 @@ import {
     dbReplaceContacts, dbReplaceSessions,
 } from "./chat-db";
 import { resolveUserIdentity } from "./settings-storage";
-import { composePokeLine, loadSessionPokeSuffix } from "./poke-suffix";
+import {
+    composePokeLine,
+    extractPokeSuffixDirective,
+    loadSessionPokeSuffix,
+    saveCharacterPokeSuffix,
+    stripPokeSuffixDirective,
+} from "./poke-suffix";
 import { loadCharacters } from "./character-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 import { emitChatPluginEvent, runChatPluginTransformSync } from "./chat-plugin-hooks";
@@ -1159,6 +1165,25 @@ export function createToolExecutionId(): string {
     return `toolrun_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/**
+ * 角色用 [设置拍一拍:后缀] 改自己的拍一拍：把指令从文本里摘掉，并把后缀写到该角色身上。
+ * 返回清洗后的文本（没写指令时原样返回）。
+ * 群聊里发言角色只能看消息上的 senderCharacterId；单聊直接是会话对应的角色。
+ */
+function consumePokeSuffixDirective(
+    text: string | undefined,
+    sessionId: string,
+    senderCharacterId?: string,
+): string | undefined {
+    if (!text || !text.includes("设置拍一拍")) return text;
+    const { text: cleaned, suffix } = extractPokeSuffixDirective(text);
+    if (suffix === null) return text;
+    const session = _sessionsCache.find(s => s.id === sessionId);
+    const ownerId = senderCharacterId || (session && !session.isGroup ? session.contactId : "");
+    if (ownerId) saveCharacterPokeSuffix(ownerId, suffix);
+    return cleaned;
+}
+
 export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "status"> & {
     status?: ChatMessageStatus;
     createdAt?: string;
@@ -1175,6 +1200,20 @@ export function pushChatMessage(msg: Omit<ChatMessage, "id" | "createdAt" | "sta
     const pluginResult = runChatPluginTransformSync("message.beforePersist", { message: newMsg });
     if (pluginResult.message && typeof pluginResult.message === "object" && pluginResult.message.id === newMsg.id) {
         newMsg = pluginResult.message;
+    }
+
+    // 角色自改拍一拍：[设置拍一拍:后缀] 不进气泡，落库前摘掉并写到该角色身上。
+    // 聊天、朋友圈动作、追发/定时唤醒等全部落库路径都经过这里，所以各处的指令都生效。
+    if (newMsg.role === "assistant") {
+        const cleanedContent = consumePokeSuffixDirective(newMsg.content, newMsg.sessionId, newMsg.senderCharacterId);
+        const cleanedRaw = consumePokeSuffixDirective(newMsg.rawResponseText, newMsg.sessionId, newMsg.senderCharacterId);
+        if ((cleanedContent !== undefined && cleanedContent !== newMsg.content) || cleanedRaw !== newMsg.rawResponseText) {
+            newMsg = {
+                ...newMsg,
+                ...(cleanedContent !== undefined ? { content: cleanedContent } : {}),
+                ...(cleanedRaw !== undefined ? { rawResponseText: cleanedRaw } : {}),
+            };
+        }
     }
 
     _messagesCache.push(newMsg);
@@ -1996,6 +2035,10 @@ export function replaceResponseBatchWithParts(
     const insertIdx = _messagesCache.findIndex(m => m.id === firstMessage.id);
     if (insertIdx === -1) return [];
 
+    // 角色自改拍一拍：占位消息那一步可能已经生效过（幂等，写同样的值）；
+    // 存下来的 raw 也顺手摘干净，免得之后编辑重放又把它当台词显示。
+    const cleanedRawResponseText = consumePokeSuffixDirective(rawResponseText, sessionId, firstMessage.senderCharacterId) ?? rawResponseText;
+
     const deletedIds = batchMessages.map(m => m.id);
     _messagesCache = _messagesCache.filter(m => !deletedIds.includes(m.id));
     dbDeleteMessagesByIds(deletedIds);
@@ -2005,7 +2048,7 @@ export function replaceResponseBatchWithParts(
         id: createMessageId(),
         sessionId,
         role: firstMessage.role,
-        content: part.content,
+        content: stripPokeSuffixDirective(part.content),
         mediaType: part.mediaType,
         origin: firstMessage.origin,
         mediaData: part.mediaData,
@@ -2013,7 +2056,7 @@ export function replaceResponseBatchWithParts(
         createdAt: new Date(baseTime + index).toISOString(),
         order: baseOrder + index * 0.001,
         responseBatchId,
-        rawResponseText,
+        rawResponseText: cleanedRawResponseText,
         responseRoundId: firstMessage.responseRoundId,
         editableResponseText: firstMessage.editableResponseText,
         // 云消息身份必须跟着走：丢了它，微信云同步下一轮会把原文当成「还没导入过」
@@ -2070,7 +2113,7 @@ export function replaceResponseBatchWithParts(
         saveChatSessions(sessions);
     }
 
-    dispatchResponseBatchReplaced(sessionId, newMessages, rawResponseText);
+    dispatchResponseBatchReplaced(sessionId, newMessages, cleanedRawResponseText);
     return newMessages;
 }
 
@@ -2127,7 +2170,7 @@ export function replaceGroupResponseRound(
         id: createMessageId(),
         sessionId,
         role: firstMessage.role,
-        content: msg.content,
+        content: stripPokeSuffixDirective(msg.content),
         mediaType: msg.mediaType,
         origin: firstMessage.origin,
         mediaData: msg.mediaData,
@@ -2135,7 +2178,8 @@ export function replaceGroupResponseRound(
         createdAt: new Date(baseTime + index).toISOString(),
         order: baseOrder + index * 0.001,
         responseBatchId: msg.responseBatchId,
-        rawResponseText: msg.rawResponseText,
+        // 群聊整轮重建：每个角色各自认领自己的 [设置拍一拍:后缀]
+        rawResponseText: consumePokeSuffixDirective(msg.rawResponseText, sessionId, msg.senderCharacterId),
         responseRoundId,
         editableResponseText,
         cloudSync: firstMessage.cloudSync,

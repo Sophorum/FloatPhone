@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useContext } from "react";
-import { Plus, RefreshCw, Rss, AlertCircle, FileEdit, Trash2, X, Check, Copy, Folder, FolderPlus, FolderInput, Pencil, ChevronRight, Pin } from "lucide-react";
+import { Plus, RefreshCw, Rss, AlertCircle, FileEdit, Trash2, X, Check, Copy, Folder, FolderPlus, FolderInput, Pencil, ChevronRight, Pin, Search } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import { useLongPressReorder } from "./use-long-press-reorder";
 import { applyGroupOrder } from "@/lib/list-order";
@@ -62,6 +62,9 @@ export function ApiSettings() {
     // Testing and Fetching states
     const [isFetching, setIsFetching] = useState<Record<string, boolean>>({});
     const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>({});
+    /** 模型选择弹窗：打开的是哪个配置的列表 + 弹窗里的搜索词 */
+    const [modelPickerId, setModelPickerId] = useState<string | null>(null);
+    const [modelQuery, setModelQuery] = useState("");
     const [isTesting, setIsTesting] = useState<Record<string, boolean>>({});
     const [testResult, setTestResult] = useState<Record<string, { success: boolean; message: string }>>({});
 
@@ -231,6 +234,12 @@ export function ApiSettings() {
         setTestResult(newTestResults);
     };
 
+    /** 打开「搜索并选择模型」弹窗：搜索词每次重置，不残留上次的筛选条件 */
+    const openModelPicker = (configId: string) => {
+        setModelQuery("");
+        setModelPickerId(configId);
+    };
+
     // Use unified determineBaseUrl from api-helpers
 
     const fetchModels = async (config: ApiConfig) => {
@@ -276,6 +285,8 @@ export function ApiSettings() {
             }
             setFetchedModels(prev => ({ ...prev, [config.id]: modelNames }));
             setTestResult(prev => ({ ...prev, [config.id]: { success: true, message: `成功获取 ${modelNames.length} 个模型` } }));
+            // 拉完直接把带搜索的弹窗打开：省一次点击，模型多的中转站尤其需要
+            if (modelNames.length > 0) openModelPicker(config.id);
         } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : String(error);
             setTestResult(prev => ({ ...prev, [config.id]: { success: false, message: `拉取失败: ${msg}` } }));
@@ -620,16 +631,20 @@ export function ApiSettings() {
                                             <label className="menu-desc ml-1">默认模型 (Default Model)</label>
                                             <div className="flex gap-2">
                                                 {fetchedModels[config.id] && fetchedModels[config.id].length > 0 ? (
-                                                    <select
-                                                        value={config.defaultModel}
-                                                        onChange={(e) => updateConfig(config.id, { defaultModel: e.target.value })}
-                                                        className="ui-select flex-1"
+                                                    /* 用按钮替掉原生 select：模型常有上百个，原生下拉没法搜，点开走带搜索的弹窗 */
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openModelPicker(config.id)}
+                                                        className="ui-input flex-1 min-w-0 items-center justify-between gap-2 text-left cursor-pointer"
+                                                        style={{ display: "flex" }}
+                                                        aria-label="搜索并选择模型"
+                                                        title="搜索并选择模型"
                                                     >
-                                                        <option value="">请选择模型...</option>
-                                                        {fetchedModels[config.id].map(m => (
-                                                            <option key={m} value={m}>{m}</option>
-                                                        ))}
-                                                    </select>
+                                                        <span className={`truncate ${config.defaultModel ? "" : "opacity-50"}`}>
+                                                            {config.defaultModel || "请选择模型..."}
+                                                        </span>
+                                                        <Search size={15} className="shrink-0 opacity-50" />
+                                                    </button>
                                                 ) : (
                                                     <input
                                                         type="text"
@@ -800,6 +815,80 @@ export function ApiSettings() {
                             >
                                 <FolderInput size={16} /> 移入{moveSelection.size > 0 ? `（${moveSelection.size}）` : ""}
                             </button>
+                        </div>
+                    </BottomSheet>
+                );
+            })()}
+
+            {modelPickerId && (() => {
+                const config = configs.find(c => c.id === modelPickerId);
+                if (!config) return null;
+                const allModels = fetchedModels[config.id] ?? [];
+                const keyword = modelQuery.trim().toLowerCase();
+                const visibleModels = keyword
+                    ? allModels.filter(m => m.toLowerCase().includes(keyword))
+                    : allModels;
+                return (
+                    <BottomSheet title="选择模型" onClose={() => setModelPickerId(null)}>
+                        <div className="flex flex-col gap-2">
+                            <input
+                                type="text"
+                                value={modelQuery}
+                                autoFocus
+                                placeholder="搜索模型名…"
+                                onChange={(e) => setModelQuery(e.target.value)}
+                                onKeyDown={(e) => {
+                                    // 回车直接选第一个匹配项，键盘操作也能一步到位
+                                    if (e.key === "Enter" && !e.nativeEvent.isComposing && visibleModels.length > 0) {
+                                        e.preventDefault();
+                                        updateConfig(config.id, { defaultModel: visibleModels[0] });
+                                        setModelPickerId(null);
+                                    }
+                                }}
+                                className="ui-input w-full"
+                            />
+                            <span className="menu-desc px-1">
+                                {keyword
+                                    ? `匹配 ${visibleModels.length} 个 / 共 ${allModels.length} 个模型`
+                                    : `共 ${allModels.length} 个模型，输入关键词筛选`}
+                            </span>
+                            {visibleModels.length === 0 ? (
+                                <div className="menu-desc text-center py-6">没有匹配「{modelQuery.trim()}」的模型</div>
+                            ) : (
+                                <div className="flex max-h-[50vh] flex-col gap-1 overflow-y-auto">
+                                    {visibleModels.map(model => {
+                                        const selected = model === config.defaultModel;
+                                        return (
+                                            <button
+                                                key={model}
+                                                type="button"
+                                                className="binding-sheet-option"
+                                                data-selected={selected}
+                                                aria-pressed={selected}
+                                                onClick={() => {
+                                                    updateConfig(config.id, { defaultModel: model });
+                                                    setModelPickerId(null);
+                                                }}
+                                            >
+                                                <span className="binding-sheet-check">{selected && <Check size={15} />}</span>
+                                                <span className="binding-sheet-option-text">{model}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {config.defaultModel ? (
+                                <button
+                                    type="button"
+                                    className="ui-btn ui-btn-ghost w-full"
+                                    onClick={() => {
+                                        updateConfig(config.id, { defaultModel: "" });
+                                        setModelPickerId(null);
+                                    }}
+                                >
+                                    清除已选模型
+                                </button>
+                            ) : null}
                         </div>
                     </BottomSheet>
                 );

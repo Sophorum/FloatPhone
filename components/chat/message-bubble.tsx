@@ -1516,7 +1516,7 @@ function PokeBubble({ msg, charName, userName, characterId }: { msg: ChatMessage
 
     // 微信的规则：后缀属于被拍的人。
     //   拍你   → 取「该角色绑定的面具」上的后缀（resolveUserIdentity 走现成的绑定级联）
-    //   拍角色 → 取「会话 → 聊天信息 → 设置拍一拍」那一格
+    //   拍角色 → 取被拍那个角色自己的后缀（聊天信息里按角色设置，群里点名也一样）
     // 名字按 role 换算：「我」在角色输出里指角色自己，在用户消息里指你。
     const text = useMemo(() => composePokeLine({
         rawSender: msg.mediaData?.pokeSender,

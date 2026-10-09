@@ -14,7 +14,7 @@ import type { StateValue } from "./chat-storage";
 import { parseStateValues, mergeStateValues } from "./state-value-parser";
 import { stripActionShells } from "./action-parser";
 import { stripTextToolDirectives } from "./text-tool-protocol";
-import { splitPokeTarget } from "./poke-suffix";
+import { splitPokeTarget, stripPokeSuffixDirective } from "./poke-suffix";
 import {
     formatCustomAppDirectiveSummary,
     getCustomAppDirectiveSyntaxHead,
@@ -605,9 +605,13 @@ function parseSegment(segment: string, parts: ParsedMessagePart[]) {
 // ── Main parser ──────────────────────────────────────────
 
 export function parseAIResponse(rawText: string, previousState: StateValue[]): ParsedAIResponse {
-    // 0. FIRST: extract ```html blocks and <style>+HTML before any processing
+    // 0. 先摘掉角色的自改拍一拍指令 [设置拍一拍:后缀]：它是指令不是台词，绝不能漏进气泡。
+    //    真正的落库/生效在 chat-storage 的保存路径上做（那里才知道是哪个角色写的）。
+    const source = stripPokeSuffixDirective(rawText);
+
+    // 0.1. FIRST: extract ```html blocks and <style>+HTML before any processing
     const htmlBlockPlaceholders: { placeholder: string; original: string }[] = [];
-    let protected_ = rawText;
+    let protected_ = source;
     // Protect ```html...``` blocks
     protected_ = protected_.replace(/```html\s*\n[\s\S]*?```/g, (match) => {
         const placeholder = `\x00HTML_BLOCK_${htmlBlockPlaceholders.length}\x00`;

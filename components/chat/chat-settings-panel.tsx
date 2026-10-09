@@ -46,8 +46,9 @@ import { CustomStatusFrame } from "@/components/chat/custom-status-frame";
 import { KeyboardAutoSendDebounceItem } from "@/components/chat/keyboard-auto-send-debounce-item";
 import { ChevronRight, Hand, Image as ImageIcon, Video, Mic, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
 import {
-    loadSessionPokeSuffix,
-    saveSessionPokeSuffix,
+    POKE_SUFFIX_UPDATED_EVENT,
+    loadCharacterPokeSuffix,
+    saveCharacterPokeSuffix,
     normalizePokeSuffix,
     POKE_SUFFIX_MAX_LENGTH,
 } from "@/lib/poke-suffix";
@@ -421,10 +422,25 @@ export function ChatSettingsPanel({
     const [showConfirmDeleteSession, setShowConfirmDeleteSession] = useState(false);
     const [showConfirmDelete, setShowConfirmDelete] = useState(false);
     const [editingAlias, setEditingAlias] = useState(false);
-    // 拍一拍（角色侧后缀）：按会话存。用户侧后缀在「设置 → 用户身份」的面具卡片里。
-    const [pokeSuffix, setPokeSuffix] = useState<string>(() => loadSessionPokeSuffix(session.id));
-    const [editingPoke, setEditingPoke] = useState(false);
+    // 拍一拍（角色侧后缀）：按角色存——一个角色一条，群里拍谁就用谁的那条；
+    // 角色自己也能用 [设置拍一拍:后缀] 改。用户侧后缀在「设置 → 用户身份」的面具卡片里。
+    const [editingPokeFor, setEditingPokeFor] = useState<string | null>(null);
     const [pokeSuffixDraft, setPokeSuffixDraft] = useState("");
+    // 刚保存的值就地生效，不必等重挂载
+    const [pokeSuffixOverrides, setPokeSuffixOverrides] = useState<Record<string, string>>({});
+    const pokeSuffixOf = (characterId: string): string => (
+        characterId in pokeSuffixOverrides ? pokeSuffixOverrides[characterId] : loadCharacterPokeSuffix(characterId)
+    );
+    const openPokeEditor = (characterId: string) => {
+        setPokeSuffixDraft(pokeSuffixOf(characterId));
+        setEditingPokeFor(characterId);
+    };
+    // 角色在聊天里改了自己的后缀（模型输出指令）：面板开着也要跟着刷新
+    useEffect(() => {
+        const onExternalWrite = () => setPokeSuffixOverrides({});
+        window.addEventListener(POKE_SUFFIX_UPDATED_EVENT, onExternalWrite);
+        return () => window.removeEventListener(POKE_SUFFIX_UPDATED_EVENT, onExternalWrite);
+    }, []);
     const [editingBilingualPrompt, setEditingBilingualPrompt] = useState(false);
     const [editingCSS, setEditingCSS] = useState(false);
     const [showScreenEffects, setShowScreenEffects] = useState(false);
@@ -848,16 +864,42 @@ export function ChatSettingsPanel({
                             <ChevronRight size={16} />
                         </div>
                     </button>
-                    <button className="menu-item" onClick={() => { setPokeSuffixDraft(pokeSuffix); setEditingPoke(true); }}>
-                        <ChatInfoIcon icon={Hand} color={BINDING_ACCENTS.identity} />
-                        <div className="menu-label-group">
-                            <span className="menu-label">设置拍一拍</span>
-                        </div>
-                        <div className="menu-right">
-                            <span className="menu-desc mr-1">{pokeSuffix || "无后缀"}</span>
-                            <ChevronRight size={16} />
-                        </div>
-                    </button>
+                    {session.isGroup ? (
+                        <>
+                            {/* 群聊：后缀挂在角色身上，所以按成员逐个设置 */}
+                            <div className="menu-item" style={{ cursor: "default" }}>
+                                <ChatInfoIcon icon={Hand} color={BINDING_ACCENTS.identity} />
+                                <div className="menu-label-group">
+                                    <span className="menu-label">设置拍一拍</span>
+                                    <span className="menu-desc">群里拍谁就用谁的后缀，点成员逐个设置</span>
+                                </div>
+                            </div>
+                            {groupChars.map(c => c && (
+                                <button key={c.id} className="menu-item" style={{ paddingLeft: 72 }} onClick={() => openPokeEditor(c.id)}>
+                                    <div className="w-[24px] h-[24px] rounded-full overflow-hidden bg-[var(--c-input)] shrink-0 flex items-center justify-center">
+                                        {c.avatar ? <img src={c.avatar} className="w-full h-full object-cover" alt="" /> : <ChatFallbackAvatar />}
+                                    </div>
+                                    <div className="menu-label-group"><span className="menu-label">{c.name}</span></div>
+                                    <div className="menu-right">
+                                        <span className="menu-desc mr-1">{pokeSuffixOf(c.id) || "无后缀"}</span>
+                                        <ChevronRight size={14} />
+                                    </div>
+                                </button>
+                            ))}
+                        </>
+                    ) : (
+                        <button className="menu-item" onClick={() => openPokeEditor(session.contactId)}>
+                            <ChatInfoIcon icon={Hand} color={BINDING_ACCENTS.identity} />
+                            <div className="menu-label-group">
+                                <span className="menu-label">设置拍一拍</span>
+                                <span className="menu-desc">TA 被拍时那句后缀，TA 自己也能改</span>
+                            </div>
+                            <div className="menu-right">
+                                <span className="menu-desc mr-1">{pokeSuffixOf(session.contactId) || "无后缀"}</span>
+                                <ChevronRight size={16} />
+                            </div>
+                        </button>
+                    )}
                     <button className="menu-item" onClick={openSearchPanel}>
                         <ChatInfoIcon icon={Search} color={BINDING_ACCENTS.api} />
                         <div className="menu-label-group"><span className="menu-label">查找聊天记录</span></div>
@@ -1422,11 +1464,16 @@ export function ChatSettingsPanel({
                 </div>
             )}
 
-            {/* Modal: Poke suffix（角色侧：被拍的人才是后缀的主人，TA 被拍用这里，你被拍用面具） */}
-            {editingPoke && (
-                <div className="modal-overlay" onClick={() => setEditingPoke(false)}>
+            {/* Modal: Poke suffix（角色侧：被拍的人才是后缀的主人，按角色存；你被拍用面具里的那条） */}
+            {editingPokeFor && (
+                <div className="modal-overlay" onClick={() => setEditingPokeFor(null)}>
                     <div className="modal-dialog" onClick={e => e.stopPropagation()}>
                         <div className="ts-17 font-semibold text-center text-[var(--c-text)]">设置拍一拍</div>
+                        {session.isGroup && (
+                            <span className="menu-desc text-center">
+                                {characters.find(c => c.id === editingPokeFor)?.name || "该角色"}
+                            </span>
+                        )}
                         <Input
                             type="text"
                             value={pokeSuffixDraft}
@@ -1434,13 +1481,14 @@ export function ChatSettingsPanel({
                             placeholder="例如：的小脑袋（留空则不加后缀）"
                         />
                         <div className="flex gap-3 w-full">
-                            <button onClick={() => setEditingPoke(false)} className="ui-btn ui-btn-ghost flex-1">取消</button>
+                            <button onClick={() => setEditingPokeFor(null)} className="ui-btn ui-btn-ghost flex-1">取消</button>
                             <button
                                 onClick={() => {
+                                    const characterId = editingPokeFor;
                                     const next = normalizePokeSuffix(pokeSuffixDraft);
-                                    saveSessionPokeSuffix(session.id, next);
-                                    setPokeSuffix(next);
-                                    setEditingPoke(false);
+                                    saveCharacterPokeSuffix(characterId, next);
+                                    setPokeSuffixOverrides(prev => ({ ...prev, [characterId]: next }));
+                                    setEditingPokeFor(null);
                                 }}
                                 className="ui-btn ui-btn-success flex-1"
                             >
